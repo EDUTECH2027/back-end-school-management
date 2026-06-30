@@ -8,6 +8,11 @@ const morgan    = require('morgan');
 const { createSchema }   = require('./db/schema');
 const errorHandler       = require('./middleware/errorHandler');
 
+// ── Bootstrap DB — must run before any route module is loaded ─────────────────
+// Route files (e.g. reportCards.js) call db.prepare() at the top level, so the
+// tables must exist before require() evaluates those modules.
+createSchema();
+
 const authRouter         = require('./routes/auth');
 const schoolRouter       = require('./routes/school');
 const academicRouter     = require('./routes/academic');
@@ -33,9 +38,6 @@ const withdrawalsRouter  = require('./routes/withdrawals');
 const portalTeacherRouter = require('./routes/portal/teacher');
 const portalStudentRouter = require('./routes/portal/student');
 const portalParentRouter  = require('./routes/portal/parent');
-
-// ── Bootstrap DB ─────────────────────────────────────────────────────────────
-createSchema();
 
 // ── Auto-seed on first run (set AUTO_SEED=1 to enable) ───────────────────────
 if (process.env.AUTO_SEED === '1') {

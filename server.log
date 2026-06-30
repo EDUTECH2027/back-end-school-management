@@ -1,0 +1,83 @@
+
+> school-management-api@1.0.0 dev
+> nodemon src/index.js
+
+[33m[nodemon] 3.1.14[39m
+[33m[nodemon] to restart at any time, enter `rs`[39m
+[33m[nodemon] watching path(s): *.*[39m
+[33m[nodemon] watching extensions: js,mjs,cjs,json[39m
+[32m[nodemon] starting `node src/index.js`[39m
+(node:27232) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+🚀  School Management API running on http://localhost:3001
+   Health: http://localhost:3001/api/health
+   Docs:   see README for full endpoint list
+
+[0mPOST /api/auth/login [32m200[0m 153.201 ms - 578[0m
+[0mPOST /api/teachers [32m201[0m 28.126 ms - 332[0m
+[0mPOST /api/students [32m201[0m 16.140 ms - 456[0m
+[0mPOST /api/parents [32m201[0m 22.546 ms - 252[0m
+[0mDELETE /api/teachers/c3277a46-78fb-4d8a-8dc1-66d48c6038f4 [32m204[0m 6.988 ms - -[0m
+[0mDELETE /api/students/94dc2094-ef51-4caa-b164-97fd1e25aa41 [32m204[0m 6.697 ms - -[0m
+[0mDELETE /api/parents/66014ce0-7be9-4efb-94d9-30adfa18609a [32m204[0m 7.796 ms - -[0m
+[0mGET /api/classes [36m304[0m 12.639 ms - -[0m
+[0mGET /api/classes [36m304[0m 4.402 ms - -[0m
+[0mPOST /api/teachers [32m201[0m 3.966 ms - 383[0m
+[0mGET /api/attendance/teachers?teacherId=a291312c-d21c-4715-b2f2-93c8cfe4df3a [32m200[0m 4.143 ms - 2[0m
+[0mPOST /api/payroll/bulk [32m201[0m 4.676 ms - 25[0m
+[0mPOST /api/payroll/bulk [32m201[0m 2.359 ms - 25[0m
+[0mGET /api/payroll?month=2026-06 [32m200[0m 1.285 ms - 3149[0m
+[0mGET /api/payroll?month=2026-06 [36m304[0m 2.533 ms - -[0m
+[0mGET /api/classes [36m304[0m 1.630 ms - -[0m
+[0mGET /api/academic/terms [36m304[0m 2.289 ms - -[0m
+[0mGET /api/classes [36m304[0m 1.247 ms - -[0m
+[0mGET /api/academic/terms [36m304[0m 2.184 ms - -[0m
+[0mGET /api/classes/c1/students [36m304[0m 1.672 ms - -[0m
+[0mGET /api/marks?classId=c1&subjectId=sub1&termId=t2 [32m200[0m 1.032 ms - 2[0m
+[0mGET /api/attendance?date=2026-06-30 [32m200[0m 2.103 ms - 2[0m
+[0mGET /api/dashboard [32m200[0m 3.472 ms - 1717[0m
+[0mGET /api/students [32m200[0m 1.504 ms - 8413[0m
+[0mGET /api/attendance?date=2026-06-30 [36m304[0m 0.870 ms - -[0m
+[0mGET /api/dashboard [36m304[0m 2.020 ms - -[0m
+[0mGET /api/students [36m304[0m 3.532 ms - -[0m
+[0mGET /api/students [36m304[0m 6.985 ms - -[0m
+[0mGET /api/classes [36m304[0m 4.268 ms - -[0m
+[0mGET /api/students [36m304[0m 5.037 ms - -[0m
+[0mGET /api/classes [36m304[0m 2.184 ms - -[0m
+[0mGET /api/classes [36m304[0m 3.037 ms - -[0m
+[0mGET /api/classes [36m304[0m 1.536 ms - -[0m
+[0mGET /api/classes/c8/students [32m200[0m 1.289 ms - 1032[0m
+[0mGET /api/teachers [32m200[0m 2.503 ms - 3171[0m
+[0mGET /api/teachers [36m304[0m 1.869 ms - -[0m
+[0mPOST /api/payroll/bulk [32m201[0m 2.386 ms - 25[0m
+[0mPOST /api/payroll/bulk [32m201[0m 2.263 ms - 25[0m
+[0mGET /api/payroll?month=2026-06 [36m304[0m 1.526 ms - -[0m
+[0mGET /api/payroll?month=2026-06 [36m304[0m 1.030 ms - -[0m
+[0mPOST /api/payroll/bulk [32m201[0m 1.734 ms - 25[0m
+[0mPOST /api/payroll/bulk [32m201[0m 1.607 ms - 25[0m
+[0mGET /api/payroll?month=2026-06 [36m304[0m 2.845 ms - -[0m
+[0mGET /api/payroll?month=2026-06 [36m304[0m 1.838 ms - -[0m
+[0mGET /api/teachers [36m304[0m 0.885 ms - -[0m
+[0mGET /api/teachers [36m304[0m 1.388 ms - -[0m
+[0mGET /api/teachers [36m304[0m 1.243 ms - -[0m
+[0mGET /api/teachers [36m304[0m 1.156 ms - -[0m
+[0mGET /api/attendance/teachers?teacherId=c3277a46-78fb-4d8a-8dc1-66d48c6038f4 [32m200[0m 0.927 ms - 2[0m
+[0mGET /api/attendance?date=2026-06-30 [33m401[0m 2.735 ms - 36[0m
+[0mGET /api/attendance?date=2026-06-30 [33m401[0m 0.821 ms - 36[0m
+[0mGET /api/dashboard [33m401[0m 1.019 ms - 36[0m
+[0mGET /api/students [33m401[0m 0.826 ms - 36[0m
+[0mGET /api/dashboard [33m401[0m 0.818 ms - 36[0m
+[0mGET /api/students [33m401[0m 0.831 ms - 36[0m
+[0mGET /api/attendance?date=2026-06-30 [33m401[0m 11.594 ms - 36[0m
+[0mGET /api/dashboard [33m401[0m 1.149 ms - 36[0m
+[0mGET /api/students [33m401[0m 0.996 ms - 36[0m
+[0mGET /api/attendance?date=2026-06-30 [33m401[0m 4.660 ms - 36[0m
+[0mGET /api/dashboard [33m401[0m 0.762 ms - 36[0m
+[0mGET /api/students [33m401[0m 1.055 ms - 36[0m
+[0mGET /api/dashboard [33m401[0m 7.300 ms - 36[0m
+[0mGET /api/attendance?date=2026-06-30 [33m401[0m 1.218 ms - 36[0m
+[0mGET /api/students [33m401[0m 0.995 ms - 36[0m
+[0mGET /api/attendance?date=2026-06-30 [33m401[0m 0.771 ms - 36[0m
+[0mGET /api/dashboard [33m401[0m 1.048 ms - 36[0m
+[0mGET /api/students [33m401[0m 0.780 ms - 36[0m

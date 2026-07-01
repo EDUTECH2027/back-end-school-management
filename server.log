@@ -81,3 +81,69 @@
 [0mGET /api/attendance?date=2026-06-30 [33m401[0m 0.771 ms - 36[0m
 [0mGET /api/dashboard [33m401[0m 1.048 ms - 36[0m
 [0mGET /api/students [33m401[0m 0.780 ms - 36[0m
+[32m[nodemon] restarting due to changes...[39m
+[32m[nodemon] starting `node src/index.js`[39m
+d:\school-management\backend\src\db\database.js:11
+db.exec('PRAGMA journal_mode = WAL');
+   ^
+
+Error: database is locked
+    at Object.<anonymous> (d:\school-management\backend\src\db\database.js:11:4)
+    at Module._compile (node:internal/modules/cjs/loader:1812:14)
+    at Object..js (node:internal/modules/cjs/loader:1943:10)
+    at Module.load (node:internal/modules/cjs/loader:1533:32)
+    at Module._load (node:internal/modules/cjs/loader:1335:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+    at Module.require (node:internal/modules/cjs/loader:1556:12)
+    at require (node:internal/modules/helpers:152:16)
+    at Object.<anonymous> (d:\school-management\backend\src\db\schema.js:1:12)
+    at Module._compile (node:internal/modules/cjs/loader:1812:14) {
+  code: 'ERR_SQLITE_ERROR',
+  errcode: 261,
+  errstr: 'database is locked'
+}
+
+Node.js v24.14.0
+[31m[nodemon] app crashed - waiting for file changes before starting...[39m
+[32m[nodemon] restarting due to changes...[39m
+[32m[nodemon] starting `node src/index.js`[39m
+(node:7516) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+d:\school-management\backend\src\index.js:117
+  console.log(`\n🚀  School Management API running on http://localhost:${VITE_}`);
+                                                                         ^
+
+ReferenceError: VITE_ is not defined
+    at Server.<anonymous> (d:\school-management\backend\src\index.js:117:74)
+    at Object.onceWrapper (node:events:622:28)
+    at Server.emit (node:events:520:35)
+    at emitListeningNT (node:net:1991:10)
+    at process.processTicksAndRejections (node:internal/process/task_queues:89:21)
+
+Node.js v24.14.0
+[31m[nodemon] app crashed - waiting for file changes before starting...[39m
+[32m[nodemon] restarting due to changes...[39m
+[32m[nodemon] starting `node src/index.js`[39m
+(node:12292) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+node:events:486
+      throw er; // Unhandled 'error' event
+      ^
+
+Error: listen EADDRINUSE: address already in use 0.0.0.0:3001
+    at Server.setupListenHandle [as _listen2] (node:net:1948:16)
+    at listenInCluster (node:net:2005:12)
+    at node:net:2214:7
+    at process.processTicksAndRejections (node:internal/process/task_queues:90:21)
+Emitted 'error' event on Server instance at:
+    at emitErrorNT (node:net:1984:8)
+    at process.processTicksAndRejections (node:internal/process/task_queues:90:21) {
+  code: 'EADDRINUSE',
+  errno: -4091,
+  syscall: 'listen',
+  address: '0.0.0.0',
+  port: 3001
+}
+
+Node.js v24.14.0
+[31m[nodemon] app crashed - waiting for file changes before starting...[39m

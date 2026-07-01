@@ -20,10 +20,10 @@ router.get('/:id', authenticate, (req, res) => {
 
 router.post('/', authenticate, (req, res) => {
   const { grade_level_id, grade_level_name, name, capacity, room, class_teacher_id, class_teacher_name } = req.body;
-  if (!grade_level_id || !name) return res.status(422).json({ error: 'grade_level_id and name required' });
+  if (!name) return res.status(422).json({ error: 'name required' });
   const id = uuid();
-  db.prepare(`INSERT INTO classes VALUES (?,?,?,?,?,?,?,?,?,datetime('now'))`)
-    .run(id, grade_level_id, grade_level_name||'', name, capacity||40, room||null, class_teacher_id||null, class_teacher_name||null, 0);
+  db.prepare(`INSERT INTO classes (id,grade_level_id,grade_level_name,name,capacity,room,class_teacher_id,class_teacher_name,enrolled,created_at) VALUES (?,?,?,?,?,?,?,?,?,datetime('now'))`)
+    .run(id, grade_level_id||null, grade_level_name||null, name, capacity||40, room||null, class_teacher_id||null, class_teacher_name||null, 0);
   res.status(201).json(db.prepare('SELECT * FROM classes WHERE id=?').get(id));
 });
 

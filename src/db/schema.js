@@ -352,6 +352,30 @@ function createSchema() {
   // Add type column to announcements (info / warning / success)
   try { db.exec(`ALTER TABLE announcements ADD COLUMN type TEXT DEFAULT 'info'`); } catch (_) {}
 
+  // Make grade_level_id nullable on classes (remove NOT NULL + FK constraint)
+  const classGlCol = db.prepare("PRAGMA table_info(classes)").all().find(c => c.name === 'grade_level_id');
+  if (classGlCol && classGlCol.notnull === 1) {
+    db.exec('PRAGMA foreign_keys = OFF');
+    db.exec(`
+      CREATE TABLE classes_new (
+        id                 TEXT PRIMARY KEY,
+        grade_level_id     TEXT,
+        grade_level_name   TEXT,
+        name               TEXT NOT NULL UNIQUE,
+        capacity           INTEGER NOT NULL DEFAULT 40,
+        room               TEXT,
+        class_teacher_id   TEXT REFERENCES teachers(id) ON DELETE SET NULL,
+        class_teacher_name TEXT,
+        enrolled           INTEGER DEFAULT 0,
+        created_at         TEXT DEFAULT (datetime('now'))
+      );
+      INSERT INTO classes_new SELECT * FROM classes;
+      DROP TABLE classes;
+      ALTER TABLE classes_new RENAME TO classes;
+    `);
+    db.exec('PRAGMA foreign_keys = ON');
+  }
+
   // ── Role-based portal migration ──────────────────────────────────────
   // Recreate users table with new roles + student_id/parent_id columns
   const userCols = db.prepare('PRAGMA table_info(users)').all().map(c => c.name);

@@ -90,15 +90,15 @@ function bootstrapUsers() {
   const updateUserLinks = db.prepare('UPDATE users SET teacher_id = ?, student_id = ?, parent_id = ?, updated_at = datetime(\'now\') WHERE id = ?');
 
   const selectTeacher = db.prepare('SELECT * FROM teachers WHERE email = ?');
-  const insertTeacher = db.prepare(`INSERT INTO teachers (id, first_name, last_name, email, phone, gender, subjects, class_assigned, qualification, join_date, is_active, created_at, updated_at, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'), ?)`);
+  const insertTeacher = db.prepare(`INSERT INTO teachers (id, first_name, last_name, email, phone, gender, subjects, class_assigned, qualification, join_date, is_active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`);
   const updateTeacherUserId = db.prepare('UPDATE teachers SET user_id = ? WHERE id = ?');
 
   const selectParent = db.prepare('SELECT * FROM parents WHERE email = ?');
-  const insertParent = db.prepare(`INSERT INTO parents (id, name, email, phone, relationship, created_at, updated_at, user_id) VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'), ?)`);
+  const insertParent = db.prepare(`INSERT INTO parents (id, name, email, phone, relationship, created_at, updated_at) VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))`);
   const updateParentUserId = db.prepare('UPDATE parents SET user_id = ? WHERE id = ?');
 
   const selectStudent = db.prepare('SELECT * FROM students WHERE student_number = ?');
-  const insertStudent = db.prepare(`INSERT INTO students (id, student_number, first_name, last_name, class_id, class_name, grade_level_name, admission_date, is_active, created_at, updated_at, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'), ?)`);
+  const insertStudent = db.prepare(`INSERT INTO students (id, student_number, first_name, last_name, class_id, class_name, grade_level_name, admission_date, is_active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`);
   const updateStudentUserId = db.prepare('UPDATE students SET user_id = ? WHERE id = ?');
 
   db.transaction(() => {
@@ -122,19 +122,21 @@ function bootstrapUsers() {
         null,
         'Demo Qualification',
         new Date().toISOString().slice(0, 10),
-        1,
-        teacher.id
+        1
       );
       existingTeacher = selectTeacher.get(teacher.email);
     }
     let existingTeacherUser = selectUser.get(teacher.email);
     if (!existingTeacherUser) {
       insertUser.run(teacher.id, teacher.name, teacher.email, hashPassword(teacher.password), teacher.role, teacher.initials, existingTeacher.id, null, null);
-    } else if (!existingTeacherUser.teacher_id) {
-      updateUserLinks.run(existingTeacher.id, null, null, existingTeacherUser.id);
-    }
-    if (existingTeacher && !existingTeacher.user_id) {
       updateTeacherUserId.run(teacher.id, existingTeacher.id);
+    } else {
+      if (!existingTeacherUser.teacher_id) {
+        updateUserLinks.run(existingTeacher.id, null, null, existingTeacherUser.id);
+      }
+      if (!existingTeacher.user_id) {
+        updateTeacherUserId.run(teacher.id, existingTeacher.id);
+      }
     }
 
     // Student entity and user
@@ -149,19 +151,21 @@ function bootstrapUsers() {
         null,
         null,
         new Date().toISOString().slice(0, 10),
-        1,
-        student.id
+        1
       );
       existingStudent = selectStudent.get(student.studentId);
     }
     let existingStudentUser = selectUser.get(student.email);
     if (!existingStudentUser) {
       insertUser.run(student.id, student.name, student.email, hashPassword(student.password), student.role, student.initials, null, existingStudent.id, null);
-    } else if (!existingStudentUser.student_id) {
-      updateUserLinks.run(null, existingStudent.id, null, existingStudentUser.id);
-    }
-    if (existingStudent && !existingStudent.user_id) {
       updateStudentUserId.run(student.id, existingStudent.id);
+    } else {
+      if (!existingStudentUser.student_id) {
+        updateUserLinks.run(null, existingStudent.id, null, existingStudentUser.id);
+      }
+      if (!existingStudent.user_id) {
+        updateStudentUserId.run(student.id, existingStudent.id);
+      }
     }
 
     // Parent entity and user
@@ -172,19 +176,21 @@ function bootstrapUsers() {
         parent.name,
         parent.email,
         '+0000000001',
-        'guardian',
-        parent.id
+        'guardian'
       );
       existingParent = selectParent.get(parent.email);
     }
     let existingParentUser = selectUser.get(parent.email);
     if (!existingParentUser) {
       insertUser.run(parent.id, parent.name, parent.email, hashPassword(parent.password), parent.role, parent.initials, null, null, existingParent.id);
-    } else if (!existingParentUser.parent_id) {
-      updateUserLinks.run(null, null, existingParent.id, existingParentUser.id);
-    }
-    if (existingParent && !existingParent.user_id) {
       updateParentUserId.run(parent.id, existingParent.id);
+    } else {
+      if (!existingParentUser.parent_id) {
+        updateUserLinks.run(null, null, existingParent.id, existingParentUser.id);
+      }
+      if (!existingParent.user_id) {
+        updateParentUserId.run(parent.id, existingParent.id);
+      }
     }
   })();
 }

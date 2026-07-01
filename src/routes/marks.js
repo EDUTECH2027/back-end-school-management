@@ -31,14 +31,25 @@ router.post('/', authenticate, (req, res) => {
   if (!Array.isArray(records)) return res.status(422).json({ error: 'Body must be an array' });
   if (records.length === 0) return res.status(201).json({ saved: 0 });
 
-  try {
-    const find   = db.prepare('SELECT id FROM marks WHERE student_id=? AND subject_id=? AND term_id=?');
-    const update = db.prepare('UPDATE marks SET ca_score=?,exam_score=?,total_score=?,grade=?,remark=? WHERE id=?');
-    const insert = db.prepare('INSERT INTO marks (id,student_id,student_name,student_number,subject_id,subject_name,term_id,class_id,ca_score,exam_score,total_score,grade,remark) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)');
+  const find   = db.prepare('SELECT id FROM marks WHERE student_id=? AND subject_id=? AND term_id=?');
+  const update = db.prepare('UPDATE marks SET ca_score=?,exam_score=?,total_score=?,grade=?,remark=? WHERE id=?');
+  const insert = db.prepare('INSERT INTO marks (id,student_id,student_name,student_number,subject_id,subject_name,term_id,class_id,ca_score,exam_score,total_score,grade,remark) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)');
 
-    let saved = 0;
-    for (const r of records) {
-      if (!r.studentId || !r.subjectId || !r.termId) continue;
+  // Validate that the referenced term and subject exist before starting inserts.
+  // This gives a clear error instead of a cryptic FK constraint message.
+  const firstRecord = records.find(r => r.termId && r.subjectId);
+  if (firstRecord) {
+    const termExists    = db.prepare('SELECT 1 FROM terms WHERE id=?').get(firstRecord.termId);
+    const subjectExists = db.prepare('SELECT 1 FROM subjects WHERE id=?').get(firstRecord.subjectId);
+    if (!termExists)    return res.status(422).json({ error: `Term not found: ${firstRecord.termId}` });
+    if (!subjectExists) return res.status(422).json({ error: `Subject not found: ${firstRecord.subjectId}` });
+  }
+
+  let saved = 0;
+  const errors = [];
+  for (const r of records) {
+    if (!r.studentId || !r.subjectId || !r.termId) continue;
+    try {
       const total = Math.round(((r.caScore || 0) + (r.examScore || 0)) / 2);
       const { grade, remark } = gradeFor(total);
       const existing = find.get(r.studentId, r.subjectId, r.termId);
@@ -50,13 +61,16 @@ router.post('/', authenticate, (req, res) => {
           r.caScore||0, r.examScore||0, total, r.grade||grade, r.remark||remark);
       }
       saved++;
+    } catch (err) {
+      console.error(`[POST /api/marks] record skipped (${r.studentId}/${r.subjectId}):`, err.message);
+      errors.push({ studentId: r.studentId, subjectId: r.subjectId, error: err.message });
     }
-
-    res.status(201).json({ saved });
-  } catch (err) {
-    console.error('[POST /api/marks]', err.message);
-    res.status(500).json({ error: err.message });
   }
+
+  if (saved === 0 && errors.length > 0) {
+    return res.status(500).json({ error: errors[0].error, details: errors });
+  }
+  res.status(201).json({ saved, ...(errors.length > 0 && { skipped: errors }) });
 });
 
 // PUT /api/marks/:id

@@ -1,6 +1,4 @@
-const db = require('./database');
-
-function createSchema() {
+function createSchema(db = require('./database')) {
   db.exec(`
     -- ── Users (auth) ────────────────────────────────────────────────
     CREATE TABLE IF NOT EXISTS users (
@@ -416,6 +414,9 @@ function createSchema() {
   try { db.exec('ALTER TABLE teachers ADD COLUMN user_id TEXT REFERENCES users(id) ON DELETE SET NULL'); } catch (_) {}
   try { db.exec('ALTER TABLE students ADD COLUMN user_id TEXT REFERENCES users(id) ON DELETE SET NULL'); } catch (_) {}
   try { db.exec('ALTER TABLE parents  ADD COLUMN user_id TEXT REFERENCES users(id) ON DELETE SET NULL'); } catch (_) {}
+
+  // Force a password change on next login (set for newly-provisioned school admins)
+  try { db.exec('ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0'); } catch (_) {}
 
   // ── Student Behavior log ─────────────────────────────────────────────
   db.exec(`

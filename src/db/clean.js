@@ -10,8 +10,11 @@ const { v4: uuidv4 } = require('uuid');
 const bcrypt = require('bcryptjs');
 const db = require('./database');
 const { createSchema } = require('./schema');
+const { runWithTenant } = require('./tenantContext');
 
-createSchema();
+const SCHOOL_ID = process.env.SEED_SCHOOL_ID || 'dev-seed';
+
+runWithTenant(SCHOOL_ID, () => createSchema());
 
 const run = db.transaction(() => {
   // ── Wipe everything in safe dependency order ──────────────────────
@@ -86,6 +89,6 @@ const run = db.transaction(() => {
   );
 });
 
-run();
+runWithTenant(SCHOOL_ID, run);
 console.log('✓ Database cleaned. Fresh start — all fake data removed.');
 console.log('  Login: admin@school.com  /  Admin@2025');

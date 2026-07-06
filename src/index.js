@@ -5,15 +5,41 @@ const cors      = require('cors');
 const helmet    = require('helmet');
 const morgan    = require('morgan');
 const bcrypt    = require('bcryptjs');
-const db        = require('./db/database');
+const { v4: uuid } = require('uuid');
 
-const { createSchema }   = require('./db/schema');
-const errorHandler       = require('./middleware/errorHandler');
+const platformDb = require('./db/platform');
+const { createPlatformSchema } = require('./db/platformSchema');
+const { createSchema } = require('./db/schema');
+const tenantContext = require('./db/tenantContext');
+const errorHandler = require('./middleware/errorHandler');
 
-// ── Bootstrap DB — must run before any route module is loaded ─────────────────
-// Route files (e.g. reportCards.js) call db.prepare() at the top level, so the
-// tables must exist before require() evaluates those modules.
-createSchema();
+// ── Bootstrap platform registry DB ─────────────────────────────────────────────
+createPlatformSchema(platformDb);
+
+// ── Bootstrap a first platform admin if none exists ────────────────────────────
+function bootstrapPlatformAdmin() {
+  const { n } = platformDb.prepare('SELECT COUNT(*) AS n FROM platform_admins').get();
+  if (n > 0) return;
+
+  const email = process.env.PLATFORM_ADMIN_EMAIL || 'superadmin@platform.local';
+  const password = process.env.PLATFORM_ADMIN_PASSWORD || 'SuperAdmin@2025';
+  platformDb.prepare(`
+    INSERT INTO platform_admins (id, name, email, password_hash, role, initials, created_at, updated_at)
+    VALUES (?, 'Super Admin', ?, ?, 'platform_owner', 'SA', datetime('now'), datetime('now'))
+  `).run(uuid(), email, bcrypt.hashSync(password, 10));
+
+  console.log(`[server] Bootstrapped platform owner account: ${email} / ${password}`);
+}
+bootstrapPlatformAdmin();
+
+// ── Run pending tenant-schema migrations for every registered school on boot ───
+for (const school of platformDb.prepare('SELECT id FROM schools').all()) {
+  try {
+    tenantContext.runWithTenant(school.id, () => createSchema(require('./db/database')));
+  } catch (e) {
+    console.error(`[server] Failed to migrate tenant ${school.id}:`, e.message);
+  }
+}
 
 const authRouter         = require('./routes/auth');
 const schoolRouter       = require('./routes/school');
@@ -41,175 +67,18 @@ const portalTeacherRouter = require('./routes/portal/teacher');
 const portalStudentRouter = require('./routes/portal/student');
 const portalParentRouter  = require('./routes/portal/parent');
 
-function hashPassword(password) {
-  return bcrypt.hashSync(password, 10);
-}
-
-function bootstrapUsers() {
-  const admin = {
-    id: 'u-admin-1',
-    name: 'System Admin',
-    email: 'admin@school.local',
-    password: 'Admin@123',
-    role: 'super_admin',
-    initials: 'SA',
-  };
-
-  const teacher = {
-    id: 'u-teacher-1',
-    name: 'Demo Teacher',
-    email: 'teacher@school.local',
-    password: 'Teacher@123',
-    role: 'teacher',
-    initials: 'DT',
-    teacherId: 'tc-bootstrap-1',
-  };
-
-  const student = {
-    id: 'u-student-1',
-    name: 'Demo Student',
-    email: 'student@school.local',
-    password: 'Student@123',
-    role: 'student',
-    initials: 'DS',
-    studentId: 'st-bootstrap-1',
-  };
-
-  const parent = {
-    id: 'u-parent-1',
-    name: 'Demo Parent',
-    email: 'parent@school.local',
-    password: 'Parent@123',
-    role: 'parent',
-    initials: 'DP',
-    parentId: 'par-bootstrap-1',
-  };
-
-  const selectUser = db.prepare('SELECT * FROM users WHERE email = ?');
-  const insertUser = db.prepare(`INSERT INTO users (id, name, email, password_hash, role, initials, teacher_id, student_id, parent_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`);
-  const updateUserLinks = db.prepare('UPDATE users SET teacher_id = ?, student_id = ?, parent_id = ?, updated_at = datetime(\'now\') WHERE id = ?');
-
-  const selectTeacher = db.prepare('SELECT * FROM teachers WHERE email = ?');
-  const insertTeacher = db.prepare(`INSERT INTO teachers (id, first_name, last_name, email, phone, gender, subjects, class_assigned, qualification, join_date, is_active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`);
-  const updateTeacherUserId = db.prepare('UPDATE teachers SET user_id = ? WHERE id = ?');
-
-  const selectParent = db.prepare('SELECT * FROM parents WHERE email = ?');
-  const insertParent = db.prepare(`INSERT INTO parents (id, name, email, phone, relationship, created_at, updated_at) VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))`);
-  const updateParentUserId = db.prepare('UPDATE parents SET user_id = ? WHERE id = ?');
-
-  const selectStudent = db.prepare('SELECT * FROM students WHERE student_number = ?');
-  const insertStudent = db.prepare(`INSERT INTO students (id, student_number, first_name, last_name, class_id, class_name, grade_level_name, admission_date, is_active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`);
-  const updateStudentUserId = db.prepare('UPDATE students SET user_id = ? WHERE id = ?');
-
-  db.transaction(() => {
-    // Admin
-    const existingAdmin = selectUser.get(admin.email);
-    if (!existingAdmin) {
-      insertUser.run(admin.id, admin.name, admin.email, hashPassword(admin.password), admin.role, admin.initials, null, null, null);
-    }
-
-    // Teacher entity and user
-    let existingTeacher = selectTeacher.get(teacher.email);
-    if (!existingTeacher) {
-      insertTeacher.run(
-        teacher.teacherId,
-        'Demo',
-        'Teacher',
-        teacher.email,
-        '+0000000000',
-        'other',
-        '[]',
-        null,
-        'Demo Qualification',
-        new Date().toISOString().slice(0, 10),
-        1
-      );
-      existingTeacher = selectTeacher.get(teacher.email);
-    }
-    let existingTeacherUser = selectUser.get(teacher.email);
-    if (!existingTeacherUser) {
-      insertUser.run(teacher.id, teacher.name, teacher.email, hashPassword(teacher.password), teacher.role, teacher.initials, existingTeacher.id, null, null);
-      updateTeacherUserId.run(teacher.id, existingTeacher.id);
-    } else {
-      if (!existingTeacherUser.teacher_id) {
-        updateUserLinks.run(existingTeacher.id, null, null, existingTeacherUser.id);
-      }
-      if (!existingTeacher.user_id) {
-        updateTeacherUserId.run(teacher.id, existingTeacher.id);
-      }
-    }
-
-    // Student entity and user
-    let existingStudent = selectStudent.get(student.studentId);
-    if (!existingStudent) {
-      insertStudent.run(
-        student.studentId,
-        student.studentId,
-        'Demo',
-        'Student',
-        null,
-        null,
-        null,
-        new Date().toISOString().slice(0, 10),
-        1
-      );
-      existingStudent = selectStudent.get(student.studentId);
-    }
-    let existingStudentUser = selectUser.get(student.email);
-    if (!existingStudentUser) {
-      insertUser.run(student.id, student.name, student.email, hashPassword(student.password), student.role, student.initials, null, existingStudent.id, null);
-      updateStudentUserId.run(student.id, existingStudent.id);
-    } else {
-      if (!existingStudentUser.student_id) {
-        updateUserLinks.run(null, existingStudent.id, null, existingStudentUser.id);
-      }
-      if (!existingStudent.user_id) {
-        updateStudentUserId.run(student.id, existingStudent.id);
-      }
-    }
-
-    // Parent entity and user
-    let existingParent = selectParent.get(parent.email);
-    if (!existingParent) {
-      insertParent.run(
-        parent.parentId,
-        parent.name,
-        parent.email,
-        '+0000000001',
-        'guardian'
-      );
-      existingParent = selectParent.get(parent.email);
-    }
-    let existingParentUser = selectUser.get(parent.email);
-    if (!existingParentUser) {
-      insertUser.run(parent.id, parent.name, parent.email, hashPassword(parent.password), parent.role, parent.initials, null, null, existingParent.id);
-      updateParentUserId.run(parent.id, existingParent.id);
-    } else {
-      if (!existingParentUser.parent_id) {
-        updateUserLinks.run(null, null, existingParent.id, existingParentUser.id);
-      }
-      if (!existingParent.user_id) {
-        updateParentUserId.run(parent.id, existingParent.id);
-      }
-    }
-  })();
-}
-
-bootstrapUsers();
-
-// ── Auto-seed on first run (set AUTO_SEED=1 to enable) ───────────────────────
-if (process.env.AUTO_SEED === '1') {
-  try {
-    const _db = require('./db/database');
-    const { n } = _db.prepare('SELECT COUNT(*) AS n FROM users').get();
-    if (n === 0) {
-      console.log('[server] Empty database — seeding demo data...');
-      require('./db/seed');
-    }
-  } catch (e) {
-    console.error('[server] Auto-seed error:', e.message);
-  }
-}
+// ── Platform (Super Admin) routes ───────────────────────────────────────────────
+const platformDashboardRouter     = require('./routes/platform/dashboard');
+const platformSchoolsRouter       = require('./routes/platform/schools');
+const platformPlansRouter         = require('./routes/platform/plans');
+const platformUsersRouter         = require('./routes/platform/users');
+const platformLogsRouter          = require('./routes/platform/logs');
+const platformAdminsRouter        = require('./routes/platform/admins');
+const platformAnnouncementsRouter = require('./routes/platform/announcements');
+const platformSettingsRouter      = require('./routes/platform/settings');
+const platformBackupRouter        = require('./routes/platform/backup');
+const platformReportsRouter       = require('./routes/platform/reports');
+const platformFeaturesRouter      = require('./routes/platform/features');
 
 // ── App ───────────────────────────────────────────────────────────────────────
 const app  = express();
@@ -250,6 +119,19 @@ app.use('/api/migrate',          migrateRouter);
 app.use('/api/portal/teacher',   portalTeacherRouter);
 app.use('/api/portal/student',   portalStudentRouter);
 app.use('/api/portal/parent',    portalParentRouter);
+
+// ── Platform (Super Admin) routes ───────────────────────────────────────────────
+app.use('/api/platform/dashboard',     platformDashboardRouter);
+app.use('/api/platform/schools',       platformSchoolsRouter);
+app.use('/api/platform/plans',         platformPlansRouter);
+app.use('/api/platform/users',         platformUsersRouter);
+app.use('/api/platform/logs',          platformLogsRouter);
+app.use('/api/platform/admins',        platformAdminsRouter);
+app.use('/api/platform/announcements', platformAnnouncementsRouter);
+app.use('/api/platform/settings',      platformSettingsRouter);
+app.use('/api/platform/backup',        platformBackupRouter);
+app.use('/api/platform/reports',       platformReportsRouter);
+app.use('/api/platform/features',      platformFeaturesRouter);
 
 // ── Health check ──────────────────────────────────────────────────────────────
 app.get('/api/health', (_req, res) => res.json({ status: 'ok', ts: new Date().toISOString() }));

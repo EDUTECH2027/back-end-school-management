@@ -2,6 +2,7 @@ const router = require('express').Router();
 const bcrypt = require('bcryptjs');
 const { v4: uuid } = require('uuid');
 const db = require('../db/database');
+const platformDb = require('../db/platform');
 const authenticate = require('../middleware/auth');
 const authorize = require('../middleware/authorize');
 
@@ -20,7 +21,7 @@ router.post('/portal-accounts', authenticate, authorize('super_admin', 'head_tea
     for (const t of teachers) {
       if (t.user_id) { result.teachers.skipped++; continue; }
       const email = t.email;
-      const existing = db.prepare('SELECT id FROM users WHERE email=?').get(email);
+      const existing = db.prepare('SELECT id FROM users WHERE email=? COLLATE NOCASE').get(email);
       if (existing) {
         db.prepare("UPDATE teachers SET user_id=?, updated_at=datetime('now') WHERE id=?").run(existing.id, t.id);
         result.teachers.skipped++;
@@ -32,6 +33,8 @@ router.post('/portal-accounts', authenticate, authorize('super_admin', 'head_tea
         VALUES (?,?,?,?,?,?,?,datetime('now'),datetime('now'))`)
         .run(userId, `${t.first_name} ${t.last_name}`, email, hash, 'teacher', initials, t.id);
       db.prepare("UPDATE teachers SET user_id=?, updated_at=datetime('now') WHERE id=?").run(userId, t.id);
+      platformDb.prepare(`INSERT OR REPLACE INTO user_directory (email, school_id, role, updated_at) VALUES (?,?,?,datetime('now'))`)
+        .run(email, req.user.school_id, 'teacher');
       result.teachers.created++;
     }
 
@@ -40,7 +43,7 @@ router.post('/portal-accounts', authenticate, authorize('super_admin', 'head_tea
     for (const s of students) {
       if (s.user_id) { result.students.skipped++; continue; }
       const email = `${s.student_number.toLowerCase().replace(/-/g, '')}@school.local`;
-      const existing = db.prepare('SELECT id FROM users WHERE email=?').get(email);
+      const existing = db.prepare('SELECT id FROM users WHERE email=? COLLATE NOCASE').get(email);
       if (existing) {
         db.prepare("UPDATE students SET user_id=?, updated_at=datetime('now') WHERE id=?").run(existing.id, s.id);
         result.students.skipped++;
@@ -52,6 +55,8 @@ router.post('/portal-accounts', authenticate, authorize('super_admin', 'head_tea
         VALUES (?,?,?,?,?,?,?,datetime('now'),datetime('now'))`)
         .run(userId, `${s.first_name} ${s.last_name}`, email, hash, 'student', initials, s.id);
       db.prepare("UPDATE students SET user_id=?, updated_at=datetime('now') WHERE id=?").run(userId, s.id);
+      platformDb.prepare(`INSERT OR REPLACE INTO user_directory (email, school_id, role, updated_at) VALUES (?,?,?,datetime('now'))`)
+        .run(email, req.user.school_id, 'student');
       result.students.created++;
     }
 
@@ -60,7 +65,7 @@ router.post('/portal-accounts', authenticate, authorize('super_admin', 'head_tea
     for (const p of parents) {
       if (p.user_id) { result.parents.skipped++; continue; }
       const email = p.email || `${p.id}@school.local`;
-      const existing = db.prepare('SELECT id FROM users WHERE email=?').get(email);
+      const existing = db.prepare('SELECT id FROM users WHERE email=? COLLATE NOCASE').get(email);
       if (existing) {
         db.prepare("UPDATE parents SET user_id=?, updated_at=datetime('now') WHERE id=?").run(existing.id, p.id);
         result.parents.skipped++;
@@ -72,6 +77,8 @@ router.post('/portal-accounts', authenticate, authorize('super_admin', 'head_tea
         VALUES (?,?,?,?,?,?,?,datetime('now'),datetime('now'))`)
         .run(userId, p.name, email, hash, 'parent', initials, p.id);
       db.prepare("UPDATE parents SET user_id=?, updated_at=datetime('now') WHERE id=?").run(userId, p.id);
+      platformDb.prepare(`INSERT OR REPLACE INTO user_directory (email, school_id, role, updated_at) VALUES (?,?,?,datetime('now'))`)
+        .run(email, req.user.school_id, 'parent');
       result.parents.created++;
     }
   });

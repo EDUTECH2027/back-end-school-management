@@ -2,6 +2,7 @@ const router = require('express').Router();
 const bcrypt = require('bcryptjs');
 const { v4: uuid } = require('uuid');
 const db = require('../db/database');
+const platformDb = require('../db/platform');
 const authenticate = require('../middleware/auth');
 const authorize = require('../middleware/authorize');
 
@@ -28,8 +29,10 @@ router.post('/', ...guard, (req, res) => {
   const { name, email, password, role, initials, teacher_id, student_id, parent_id } = req.body;
   if (!name || !email || !password || !role) return res.status(422).json({ error: 'name, email, password, role required' });
 
-  const existing = db.prepare('SELECT id FROM users WHERE email=?').get(email);
+  const existing = db.prepare('SELECT id FROM users WHERE email=? COLLATE NOCASE').get(email);
   if (existing) return res.status(409).json({ error: 'Email already in use' });
+  const directoryHit = platformDb.prepare('SELECT school_id FROM user_directory WHERE email=? COLLATE NOCASE').get(email);
+  if (directoryHit) return res.status(409).json({ error: 'Email already in use' });
 
   const id = uuid();
   const hash = bcrypt.hashSync(password, 10);
@@ -45,6 +48,9 @@ router.post('/', ...guard, (req, res) => {
     if (parent_id)  db.prepare("UPDATE parents  SET user_id=?, updated_at=datetime('now') WHERE id=?").run(id, parent_id);
   });
   create();
+
+  platformDb.prepare(`INSERT INTO user_directory (email, school_id, role, updated_at) VALUES (?,?,?,datetime('now'))`)
+    .run(email, req.user.school_id, role);
 
   const user = db.prepare('SELECT id,name,email,role,initials,teacher_id,student_id,parent_id,created_at FROM users WHERE id=?').get(id);
   res.status(201).json(user);
@@ -67,6 +73,16 @@ router.put('/:id', ...guard, (req, res) => {
     if (parent_id  !== undefined) db.prepare("UPDATE parents  SET user_id=?, updated_at=datetime('now') WHERE id=?").run(req.params.id, parent_id);
   });
   update();
+
+  const newEmail = email ?? current.email;
+  const newRole = role ?? current.role;
+  if (newEmail !== current.email) {
+    platformDb.prepare('DELETE FROM user_directory WHERE email=?').run(current.email);
+    platformDb.prepare(`INSERT OR REPLACE INTO user_directory (email, school_id, role, updated_at) VALUES (?,?,?,datetime('now'))`)
+      .run(newEmail, req.user.school_id, newRole);
+  } else {
+    platformDb.prepare(`UPDATE user_directory SET role=?, updated_at=datetime('now') WHERE email=?`).run(newRole, newEmail);
+  }
 
   res.json(db.prepare('SELECT id,name,email,role,initials,teacher_id,student_id,parent_id,created_at FROM users WHERE id=?').get(req.params.id));
 });
@@ -93,6 +109,7 @@ router.delete('/:id', ...guard, (req, res) => {
     db.prepare('DELETE FROM users WHERE id=?').run(req.params.id);
   });
   del();
+  platformDb.prepare('DELETE FROM user_directory WHERE email=?').run(user.email);
   res.status(204).end();
 });
 

@@ -1,34 +1,40 @@
 const router = require('express').Router();
-const db = require('../db/database');
 const authenticate = require('../middleware/auth');
 const authorize = require('../middleware/authorize');
 
 const guard = [authenticate, authorize('super_admin', 'head_teacher')];
 
 // GET /api/withdrawals?status=pending
-router.get('/', ...guard, (req, res) => {
+router.get('/', ...guard, async (req, res) => {
   const { status } = req.query;
-  let sql = `SELECT sw.*, t.first_name||' '||t.last_name AS teacher_name, t.email AS teacher_email
-             FROM salary_withdrawals sw
-             LEFT JOIN teachers t ON t.id = sw.teacher_id
-             WHERE 1=1`;
-  const params = [];
-  if (status) { sql += ' AND sw.status=?'; params.push(status); }
-  sql += ' ORDER BY sw.created_at DESC';
-  res.json(db.prepare(sql).all(...params));
+  const where = status ? { status } : {};
+  const rows = await req.db.salaryWithdrawal.findMany({
+    where,
+    include: { teacher: { select: { first_name: true, last_name: true, email: true } } },
+    orderBy: { created_at: 'desc' },
+  });
+  res.json(rows.map(({ teacher, ...rest }) => ({
+    ...rest,
+    teacher_name: teacher ? `${teacher.first_name} ${teacher.last_name}` : null,
+    teacher_email: teacher?.email ?? null,
+  })));
 });
 
 // PATCH /api/withdrawals/:id/status
-router.patch('/:id/status', ...guard, (req, res) => {
+router.patch('/:id/status', ...guard, async (req, res) => {
   const { status, notes } = req.body;
   if (!['approved', 'rejected'].includes(status)) {
     return res.status(422).json({ error: 'status must be approved or rejected' });
   }
-  const record = db.prepare('SELECT * FROM salary_withdrawals WHERE id=?').get(req.params.id);
+  const record = await req.db.salaryWithdrawal.findUnique({ where: { id: req.params.id } });
   if (!record) return res.status(404).json({ error: 'Withdrawal not found' });
-  db.prepare(`UPDATE salary_withdrawals SET status=?,reviewed_by=?,reviewed_at=datetime('now'),notes=?,updated_at=datetime('now') WHERE id=?`)
-    .run(status, req.user.id, notes || null, req.params.id);
-  res.json(db.prepare('SELECT * FROM salary_withdrawals WHERE id=?').get(req.params.id));
+  // reviewed_at is a plain String column (matches original TEXT/datetime('now') convention)
+  const reviewedAt = new Date().toISOString().replace('T', ' ').slice(0, 19);
+  const updated = await req.db.salaryWithdrawal.update({
+    where: { id: req.params.id },
+    data: { status, reviewed_by: req.user.id, reviewed_at: reviewedAt, notes: notes || null, updated_at: new Date() },
+  });
+  res.json(updated);
 });
 
 module.exports = router;

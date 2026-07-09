@@ -1,31 +1,27 @@
 const router = require('express').Router();
-const db = require('../db/database');
 const authenticate = require('../middleware/auth');
 const { v4: uuid } = require('uuid');
 
-const getEntries = db.prepare('SELECT * FROM report_card_entries WHERE report_card_id=? ORDER BY subject_name');
-
-const withEntries = (card) => {
-  if (!card) return null;
-  return { ...card, entries: getEntries.all(card.id) };
-};
+const ENTRIES_INCLUDE = { entries: { orderBy: { subject_name: 'asc' } } };
+const withEntries = (card) => card;
 
 // POST /api/report-cards/generate — build cards from saved marks for a class+term
 // Must be defined before /:id to avoid route collision
-router.post('/generate', authenticate, (req, res) => {
+router.post('/generate', authenticate, async (req, res) => {
   const { classId, termId } = req.body;
   if (!classId || !termId) return res.status(422).json({ error: 'classId and termId required' });
 
-  const term = db.prepare('SELECT * FROM terms WHERE id=?').get(termId);
+  const term = await req.db.term.findUnique({ where: { id: termId } });
   if (!term) return res.status(404).json({ error: 'Term not found' });
-  const ay = db.prepare('SELECT label FROM academic_years WHERE id=?').get(term.academic_year_id);
+  const ay = await req.db.academicYear.findUnique({ where: { id: term.academic_year_id } });
 
-  const students = db.prepare(
-    'SELECT * FROM students WHERE class_id=? AND is_active=1 ORDER BY last_name, first_name'
-  ).all(classId);
+  const students = await req.db.student.findMany({
+    where: { class_id: classId, is_active: true },
+    orderBy: [{ last_name: 'asc' }, { first_name: 'asc' }],
+  });
   if (students.length === 0) return res.status(422).json({ error: 'No active students in this class' });
 
-  const allMarks = db.prepare('SELECT * FROM marks WHERE class_id=? AND term_id=?').all(classId, termId);
+  const allMarks = await req.db.mark.findMany({ where: { class_id: classId, term_id: termId } });
 
   // Build the full canonical subject list for this class+term (union of all subjects with any mark)
   const subjectMap = {};
@@ -60,53 +56,62 @@ router.post('/generate', authenticate, (req, res) => {
     positions[s.id] = rank;
   });
 
-  const findRC      = db.prepare('SELECT id FROM report_cards WHERE student_id=? AND term_id=?');
-  const insertRC    = db.prepare(`INSERT INTO report_cards VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'),datetime('now'))`);
-  const updateRC    = db.prepare(`UPDATE report_cards SET total_marks_obtained=?,total_marks_possible=?,percentage=?,class_position=?,out_of=?,updated_at=datetime('now') WHERE id=?`);
-  const delEntries  = db.prepare('DELETE FROM report_card_entries WHERE report_card_id=?');
-  const insertEntry = db.prepare('INSERT INTO report_card_entries VALUES (?,?,?,?,?,?,?,?,?,?,?)');
-
   let generated = 0;
   try {
-    for (const student of students) {
-      const stuMarks      = marksByStudent[student.id] || {};
-      // Totals computed over the full canonical subject list so denominator is identical for everyone
-      const totalObtained = allSubjects.reduce((s, sub) => s + (stuMarks[sub.subject_id]?.total_score || 0), 0);
-      const totalPossible = allSubjects.length * 100;
-      const pct           = totalPossible > 0 ? Math.round((totalObtained / totalPossible) * 1000) / 10 : 0;
-      const position      = positions[student.id];
+    // Wrapped in one transaction (a genuine reliability fix over the original,
+    // which left partial writes on a mid-loop failure since node:sqlite's
+    // db.transaction() wasn't used here).
+    await req.db.$transaction(async (tx) => {
+      for (const student of students) {
+        const stuMarks = marksByStudent[student.id] || {};
+        // Totals computed over the full canonical subject list so denominator is identical for everyone
+        const totalObtained = allSubjects.reduce((s, sub) => s + (stuMarks[sub.subject_id]?.total_score || 0), 0);
+        const totalPossible = allSubjects.length * 100;
+        const pct = totalPossible > 0 ? Math.round((totalObtained / totalPossible) * 1000) / 10 : 0;
+        const position = positions[student.id];
 
-      const existing = findRC.get(student.id, termId);
-      let rcId;
-      if (existing) {
-        rcId = existing.id;
-        updateRC.run(totalObtained, totalPossible, pct, position, students.length, rcId);
-      } else {
-        rcId = uuid();
-        insertRC.run(
-          rcId, student.id,
-          student.first_name + ' ' + student.last_name,
-          student.student_number,
-          student.class_name, student.grade_level_name,
-          termId, term.name, ay?.label || '',
-          totalObtained, totalPossible, pct,
-          position, students.length,
-          0, 0, 0, 'Good', null, null, 'draft'
-        );
-      }
+        const existing = await tx.reportCard.findFirst({ where: { student_id: student.id, term_id: termId } });
+        let rcId;
+        if (existing) {
+          rcId = existing.id;
+          await tx.reportCard.update({
+            where: { id: rcId },
+            data: { total_marks_obtained: totalObtained, total_marks_possible: totalPossible, percentage: pct, class_position: position, out_of: students.length, updated_at: new Date() },
+          });
+        } else {
+          rcId = uuid();
+          await tx.reportCard.create({
+            data: {
+              id: rcId, student_id: student.id,
+              student_name: student.first_name + ' ' + student.last_name,
+              student_number: student.student_number,
+              class_name: student.class_name, grade_level_name: student.grade_level_name,
+              term_id: termId, term_name: term.name, academic_year: ay?.label || '',
+              total_marks_obtained: totalObtained, total_marks_possible: totalPossible, percentage: pct,
+              class_position: position, out_of: students.length,
+              days_present: 0, days_absent: 0, total_school_days: 0,
+              conduct: 'Good', class_teacher_comment: null, head_teacher_comment: null, status: 'draft',
+            },
+          });
+        }
 
-      // Write one entry per subject in the canonical list; students with no mark get 0s
-      delEntries.run(rcId);
-      for (const sub of allSubjects) {
-        const m = stuMarks[sub.subject_id];
-        insertEntry.run(
-          uuid(), rcId, sub.subject_id, sub.subject_name,
-          m?.ca_score || 0, m?.exam_score || 0, m?.total_score || 0,
-          m?.grade || null, m?.remark || null, null, null
-        );
+        // Write one entry per subject in the canonical list; students with no mark get 0s
+        await tx.reportCardEntry.deleteMany({ where: { report_card_id: rcId } });
+        if (allSubjects.length > 0) {
+          await tx.reportCardEntry.createMany({
+            data: allSubjects.map(sub => {
+              const m = stuMarks[sub.subject_id];
+              return {
+                id: uuid(), report_card_id: rcId, subject_id: sub.subject_id, subject_name: sub.subject_name,
+                ca_score: m?.ca_score || 0, exam_score: m?.exam_score || 0, total_score: m?.total_score || 0,
+                grade: m?.grade || null, remark: m?.remark || null, position: null, teacher_comment: null,
+              };
+            }),
+          });
+        }
+        generated++;
       }
-      generated++;
-    }
+    });
   } catch (err) {
     console.error('[generate report cards]', err.message);
     return res.status(500).json({ error: err.message });
@@ -116,18 +121,18 @@ router.post('/generate', authenticate, (req, res) => {
 });
 
 // GET /api/report-cards?termId=t1&classId=c4&studentId=st6&status=published
-router.get('/', authenticate, (req, res) => {
+router.get('/', authenticate, async (req, res) => {
   const { termId, classId, studentId, status } = req.query;
-  let sql = 'SELECT * FROM report_cards WHERE 1=1';
-  const params = [];
-  if (termId)    { sql += ' AND term_id=?';    params.push(termId); }
-  if (classId)   { sql += ' AND (SELECT class_id FROM students WHERE id=report_cards.student_id)=?'; params.push(classId); }
-  if (studentId) { sql += ' AND student_id=?'; params.push(studentId); }
-  if (status)    { sql += ' AND status=?';     params.push(status); }
-  sql += ' ORDER BY class_position, student_name';
+  const where = {};
+  if (termId) where.term_id = termId;
+  if (classId) where.student = { class_id: classId };
+  if (studentId) where.student_id = studentId;
+  if (status) where.status = status;
   try {
-    const stmt = db.prepare(sql);
-    const rows = params.length ? stmt.all(...params) : stmt.all();
+    const rows = await req.db.reportCard.findMany({
+      where, include: ENTRIES_INCLUDE,
+      orderBy: [{ class_position: 'asc' }, { student_name: 'asc' }],
+    });
     res.json(rows.map(withEntries));
   } catch (err) {
     console.error('[GET /report-cards]', err.message);
@@ -136,21 +141,21 @@ router.get('/', authenticate, (req, res) => {
 });
 
 // GET /api/report-cards/:id
-router.get('/:id', authenticate, (req, res) => {
-  const row = db.prepare('SELECT * FROM report_cards WHERE id=?').get(req.params.id);
+router.get('/:id', authenticate, async (req, res) => {
+  const row = await req.db.reportCard.findUnique({ where: { id: req.params.id }, include: ENTRIES_INCLUDE });
   if (!row) return res.status(404).json({ error: 'Report card not found' });
   res.json(withEntries(row));
 });
 
 // POST /api/report-cards
-router.post('/', authenticate, (req, res) => {
+router.post('/', authenticate, async (req, res) => {
   const { studentId, termId, classTeacherComment, headTeacherComment, conduct,
           daysPresent, daysAbsent, totalSchoolDays, entries = [] } = req.body;
   if (!studentId || !termId) return res.status(422).json({ error: 'studentId and termId required' });
 
-  const student = db.prepare('SELECT * FROM students WHERE id=?').get(studentId);
-  const term    = db.prepare('SELECT * FROM terms WHERE id=?').get(termId);
-  const ay      = db.prepare('SELECT label FROM academic_years WHERE id=?').get(term?.academic_year_id);
+  const student = await req.db.student.findUnique({ where: { id: studentId } });
+  const term = await req.db.term.findUnique({ where: { id: termId } });
+  const ay = term ? await req.db.academicYear.findUnique({ where: { id: term.academic_year_id } }) : null;
   if (!student) return res.status(404).json({ error: 'Student not found' });
 
   const totalObtained = entries.reduce((s, e) => s + (e.totalScore || 0), 0);
@@ -159,42 +164,60 @@ router.post('/', authenticate, (req, res) => {
 
   const id = uuid();
   try {
-    db.prepare(`INSERT INTO report_cards VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'),datetime('now'))`)
-      .run(id, studentId, student.first_name + ' ' + student.last_name, student.student_number,
-           student.class_name, student.grade_level_name, termId, term?.name || '', ay?.label || '',
-           totalObtained, totalPossible, pct, null, null,
-           daysPresent||0, daysAbsent||0, totalSchoolDays||0,
-           conduct||null, classTeacherComment||null, headTeacherComment||null, 'draft');
+    await req.db.reportCard.create({
+      data: {
+        id, student_id: studentId, student_name: student.first_name + ' ' + student.last_name, student_number: student.student_number,
+        class_name: student.class_name, grade_level_name: student.grade_level_name, term_id: termId,
+        term_name: term?.name || '', academic_year: ay?.label || '',
+        total_marks_obtained: totalObtained, total_marks_possible: totalPossible, percentage: pct,
+        class_position: null, out_of: null,
+        days_present: daysPresent || 0, days_absent: daysAbsent || 0, total_school_days: totalSchoolDays || 0,
+        conduct: conduct || null, class_teacher_comment: classTeacherComment || null, head_teacher_comment: headTeacherComment || null, status: 'draft',
+      },
+    });
 
-    const insEntry = db.prepare('INSERT INTO report_card_entries VALUES (?,?,?,?,?,?,?,?,?,?,?)');
-    for (const e of entries) {
-      insEntry.run(uuid(), id, e.subjectId, e.subjectName||null, e.caScore||0, e.examScore||0,
-                   e.totalScore||0, e.grade||null, e.remark||null, e.position||null, e.teacherComment||null);
+    if (entries.length > 0) {
+      await req.db.reportCardEntry.createMany({
+        data: entries.map(e => ({
+          id: uuid(), report_card_id: id, subject_id: e.subjectId, subject_name: e.subjectName || null,
+          ca_score: e.caScore || 0, exam_score: e.examScore || 0, total_score: e.totalScore || 0,
+          grade: e.grade || null, remark: e.remark || null, position: e.position || null, teacher_comment: e.teacherComment || null,
+        })),
+      });
     }
   } catch (err) {
     console.error('[POST /report-cards]', err.message);
     return res.status(500).json({ error: err.message });
   }
 
-  res.status(201).json(withEntries(db.prepare('SELECT * FROM report_cards WHERE id=?').get(id)));
+  const created = await req.db.reportCard.findUnique({ where: { id }, include: ENTRIES_INCLUDE });
+  res.status(201).json(withEntries(created));
 });
 
 // PUT /api/report-cards/:id
-router.put('/:id', authenticate, (req, res) => {
+router.put('/:id', authenticate, async (req, res) => {
   const { classTeacherComment, headTeacherComment, conduct,
           daysPresent, daysAbsent, totalSchoolDays, status, entries } = req.body;
   try {
-    db.prepare(`UPDATE report_cards SET class_teacher_comment=?,head_teacher_comment=?,conduct=?,
-      days_present=?,days_absent=?,total_school_days=?,status=?,updated_at=datetime('now') WHERE id=?`)
-      .run(classTeacherComment||null, headTeacherComment||null, conduct||null,
-           daysPresent||0, daysAbsent||0, totalSchoolDays||0, status||'draft', req.params.id);
+    await req.db.reportCard.update({
+      where: { id: req.params.id },
+      data: {
+        class_teacher_comment: classTeacherComment || null, head_teacher_comment: headTeacherComment || null, conduct: conduct || null,
+        days_present: daysPresent || 0, days_absent: daysAbsent || 0, total_school_days: totalSchoolDays || 0,
+        status: status || 'draft', updated_at: new Date(),
+      },
+    });
 
     if (Array.isArray(entries)) {
-      db.prepare('DELETE FROM report_card_entries WHERE report_card_id=?').run(req.params.id);
-      const ins = db.prepare('INSERT INTO report_card_entries VALUES (?,?,?,?,?,?,?,?,?,?,?)');
-      for (const e of entries) {
-        ins.run(uuid(), req.params.id, e.subjectId, e.subjectName||null, e.caScore||0, e.examScore||0,
-                e.totalScore||0, e.grade||null, e.remark||null, e.position||null, e.teacherComment||null);
+      await req.db.reportCardEntry.deleteMany({ where: { report_card_id: req.params.id } });
+      if (entries.length > 0) {
+        await req.db.reportCardEntry.createMany({
+          data: entries.map(e => ({
+            id: uuid(), report_card_id: req.params.id, subject_id: e.subjectId, subject_name: e.subjectName || null,
+            ca_score: e.caScore || 0, exam_score: e.examScore || 0, total_score: e.totalScore || 0,
+            grade: e.grade || null, remark: e.remark || null, position: e.position || null, teacher_comment: e.teacherComment || null,
+          })),
+        });
       }
     }
   } catch (err) {
@@ -202,16 +225,17 @@ router.put('/:id', authenticate, (req, res) => {
     return res.status(500).json({ error: err.message });
   }
 
-  res.json(withEntries(db.prepare('SELECT * FROM report_cards WHERE id=?').get(req.params.id)));
+  const updated = await req.db.reportCard.findUnique({ where: { id: req.params.id }, include: ENTRIES_INCLUDE });
+  res.json(withEntries(updated));
 });
 
 // PATCH /api/report-cards/:id/status
-router.patch('/:id/status', authenticate, (req, res) => {
+router.patch('/:id/status', authenticate, async (req, res) => {
   const { status } = req.body;
   const valid = ['draft', 'finalized', 'published', 'printed'];
   if (!valid.includes(status)) return res.status(422).json({ error: `status must be one of: ${valid.join(', ')}` });
-  db.prepare("UPDATE report_cards SET status=?,updated_at=datetime('now') WHERE id=?").run(status, req.params.id);
-  res.json(db.prepare('SELECT * FROM report_cards WHERE id=?').get(req.params.id));
+  const updated = await req.db.reportCard.update({ where: { id: req.params.id }, data: { status, updated_at: new Date() } });
+  res.json(updated);
 });
 
 module.exports = router;

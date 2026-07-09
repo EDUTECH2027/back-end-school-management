@@ -1,36 +1,41 @@
 const router = require('express').Router();
-const platformDb = require('../../db/platform');
-const { runWithTenant } = require('../../db/tenantContext');
+const platformClient = require('../../db/platformClient');
+const tenantPool = require('../../db/tenantPool');
 const authenticatePlatform = require('../../middleware/authenticatePlatform');
 const authorizePlatform = require('../../middleware/authorizePlatform');
 
 const guard = [authenticatePlatform, authorizePlatform()];
 
-function tenantCounts(schoolId) {
+async function tenantCounts(schoolId) {
   try {
-    return runWithTenant(schoolId, () => {
-      const db = require('../../db/database');
-      const students = db.prepare('SELECT COUNT(*) as c FROM students WHERE is_active=1').get().c;
-      const teachers = db.prepare('SELECT COUNT(*) as c FROM teachers WHERE is_active=1').get().c;
-      const parents = db.prepare('SELECT COUNT(*) as c FROM parents').get().c;
-      return { students, teachers, parents };
-    });
+    const tenantDb = tenantPool.getOrOpen(schoolId);
+    const [students, teachers, parents] = await Promise.all([
+      tenantDb.student.count({ where: { is_active: true } }),
+      tenantDb.teacher.count({ where: { is_active: true } }),
+      tenantDb.parent.count(),
+    ]);
+    return { students, teachers, parents };
   } catch {
     return { students: 0, teachers: 0, parents: 0 };
   }
 }
 
 // GET /api/platform/dashboard
-router.get('/', ...guard, (req, res) => {
-  const schools = platformDb.prepare('SELECT * FROM schools').all();
-  const plans = platformDb.prepare('SELECT * FROM subscription_plans').all();
+router.get('/', ...guard, async (req, res) => {
+  const [schools, plans] = await Promise.all([
+    platformClient.school.findMany(),
+    platformClient.subscriptionPlan.findMany(),
+  ]);
   const planById = Object.fromEntries(plans.map(p => [p.id, p]));
 
   let totalStudents = 0, totalTeachers = 0, totalParents = 0, revenue = 0;
   const byPlan = {};
 
+  // Same per-school sequential-fan-out shape as the original — schema-per-tenant
+  // means there's no free cross-tenant aggregate query the way one shared table
+  // would allow, so this isn't optimized in this pass.
   for (const school of schools) {
-    const counts = tenantCounts(school.id);
+    const counts = await tenantCounts(school.id);
     totalStudents += counts.students;
     totalTeachers += counts.teachers;
     totalParents += counts.parents;
@@ -52,13 +57,14 @@ router.get('/', ...guard, (req, res) => {
     const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
     months.push({ key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`, label: d.toLocaleString('en-US', { month: 'short' }) });
   }
+  const createdAtStr = s => (s.created_at instanceof Date ? s.created_at.toISOString() : String(s.created_at || '')).slice(0, 10);
   const overview = months.map(({ key, label }) => {
-    const newThisMonth = schools.filter(s => (s.created_at || '').slice(0, 7) === key).length;
-    const activeByMonthEnd = schools.filter(s => (s.created_at || '') <= `${key}-31` && s.status === 'active').length;
+    const newThisMonth = schools.filter(s => createdAtStr(s).slice(0, 7) === key).length;
+    const activeByMonthEnd = schools.filter(s => createdAtStr(s) <= `${key}-31` && s.status === 'active').length;
     return { month: label, active: activeByMonthEnd, new: newThisMonth };
   });
 
-  const recentActivities = platformDb.prepare('SELECT * FROM system_logs ORDER BY created_at DESC LIMIT 8').all();
+  const recentActivities = await platformClient.systemLog.findMany({ orderBy: { created_at: 'desc' }, take: 8 });
 
   res.json({
     totalSchools: schools.length,

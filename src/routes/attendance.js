@@ -1,99 +1,99 @@
 const router = require('express').Router();
-const db = require('../db/database');
 const authenticate = require('../middleware/auth');
 const { v4: uuid } = require('uuid');
 
 // ── Student Attendance ──────────────────────────────────────────────
 
 // GET /api/attendance?date=YYYY-MM-DD&classId=c1
-router.get('/', authenticate, (req, res) => {
+// NOTE: route order matters — /stats and /teachers must be declared before /:id-shaped
+// routes in files that have them, same as the original; this file has no /:id GET so
+// no collision risk, but PUT /:id below still needs to come after these specific paths.
+router.get('/', authenticate, async (req, res) => {
   const { date, classId, studentId, from, to } = req.query;
-  let sql = 'SELECT * FROM attendance_records WHERE 1=1';
-  const params = [];
-  if (date)      { sql += ' AND date=?';       params.push(date); }
-  if (classId)   { sql += ' AND class_id=?';   params.push(classId); }
-  if (studentId) { sql += ' AND student_id=?'; params.push(studentId); }
-  if (from)      { sql += ' AND date>=?';      params.push(from); }
-  if (to)        { sql += ' AND date<=?';      params.push(to); }
-  sql += ' ORDER BY date DESC, student_name';
-  res.json(db.prepare(sql).all(...params));
+  const where = {};
+  if (classId) where.class_id = classId;
+  if (studentId) where.student_id = studentId;
+  if (date) {
+    where.date = date;
+  } else if (from || to) {
+    where.date = { ...(from && { gte: from }), ...(to && { lte: to }) };
+  }
+  const rows = await req.db.attendanceRecord.findMany({ where, orderBy: [{ date: 'desc' }, { student_name: 'asc' }] });
+  res.json(rows);
 });
 
 // POST /api/attendance  — bulk upsert for a class on a given date
-router.post('/', authenticate, (req, res) => {
+router.post('/', authenticate, async (req, res) => {
   const records = req.body; // [{ studentId, studentName, studentNumber, classId, className, date, status, remarks }]
   if (!Array.isArray(records)) return res.status(422).json({ error: 'Body must be an array' });
 
-  const upsert = db.prepare(`
-    INSERT INTO attendance_records (id, student_id, student_name, student_number, class_id, class_name, date, status, remarks)
-    VALUES (?,?,?,?,?,?,?,?,?)
-    ON CONFLICT(student_id, date) DO UPDATE SET status=excluded.status, remarks=excluded.remarks
-  `);
-
-  const run = db.transaction(() => records.forEach(r =>
-    upsert.run(
-      r.id || uuid(), r.studentId, r.studentName || null, r.studentNumber || null,
-      r.classId, r.className || null, r.date, r.status, r.remarks || null
-    )
-  ));
-  run();
+  await req.db.$transaction(records.map(r => req.db.attendanceRecord.upsert({
+    where: { attendance_student_date: { student_id: r.studentId, date: r.date } },
+    create: {
+      id: r.id || uuid(), student_id: r.studentId, student_name: r.studentName || null, student_number: r.studentNumber || null,
+      class_id: r.classId, class_name: r.className || null, date: r.date, status: r.status, remarks: r.remarks || null,
+    },
+    update: { status: r.status, remarks: r.remarks || null },
+  })));
   res.status(201).json({ saved: records.length });
 });
 
-// PUT /api/attendance/:id
-router.put('/:id', authenticate, (req, res) => {
-  const { status, remarks } = req.body;
-  db.prepare('UPDATE attendance_records SET status=?,remarks=? WHERE id=?').run(status, remarks||null, req.params.id);
-  res.json(db.prepare('SELECT * FROM attendance_records WHERE id=?').get(req.params.id));
-});
-
 // GET /api/attendance/stats?classId=c1&month=2025-06
-router.get('/stats', authenticate, (req, res) => {
+router.get('/stats', authenticate, async (req, res) => {
   const { classId, month } = req.query;
   if (!classId || !month) return res.status(422).json({ error: 'classId and month required' });
   const [y, m] = month.split('-');
   const from = `${y}-${m}-01`;
-  const to   = `${y}-${m}-31`;
-  const rows = db.prepare(`
-    SELECT student_id, student_name,
-      SUM(CASE WHEN status='present' THEN 1 ELSE 0 END) as present,
-      SUM(CASE WHEN status='absent'  THEN 1 ELSE 0 END) as absent,
-      SUM(CASE WHEN status='late'    THEN 1 ELSE 0 END) as late,
-      SUM(CASE WHEN status='excused' THEN 1 ELSE 0 END) as excused,
-      COUNT(*) as total
-    FROM attendance_records
-    WHERE class_id=? AND date>=? AND date<=?
-    GROUP BY student_id
-  `).all(classId, from, to);
-  res.json(rows);
+  const to = `${y}-${m}-31`;
+
+  const rows = await req.db.attendanceRecord.findMany({
+    where: { class_id: classId, date: { gte: from, lte: to } },
+    select: { student_id: true, student_name: true, status: true },
+  });
+  const byStudent = new Map();
+  for (const r of rows) {
+    if (!byStudent.has(r.student_id)) {
+      byStudent.set(r.student_id, { student_id: r.student_id, student_name: r.student_name, present: 0, absent: 0, late: 0, excused: 0, total: 0 });
+    }
+    const s = byStudent.get(r.student_id);
+    s[r.status]++;
+    s.total++;
+  }
+  res.json([...byStudent.values()]);
+});
+
+// PUT /api/attendance/:id
+router.put('/:id', authenticate, async (req, res) => {
+  const { status, remarks } = req.body;
+  const updated = await req.db.attendanceRecord.update({ where: { id: req.params.id }, data: { status, remarks: remarks || null } });
+  res.json(updated);
 });
 
 // ── Teacher Attendance ──────────────────────────────────────────────
 
 // GET /api/attendance/teachers?teacherId=tc1&month=2025-06
-router.get('/teachers', authenticate, (req, res) => {
+router.get('/teachers', authenticate, async (req, res) => {
   const { teacherId, month, date } = req.query;
-  let sql = 'SELECT ta.*, t.first_name, t.last_name FROM teacher_attendance ta JOIN teachers t ON t.id=ta.teacher_id WHERE 1=1';
-  const params = [];
-  if (teacherId) { sql += ' AND ta.teacher_id=?'; params.push(teacherId); }
-  if (date)      { sql += ' AND ta.date=?';       params.push(date); }
-  if (month)     { sql += ' AND ta.date LIKE ?';  params.push(`${month}%`); }
-  sql += ' ORDER BY ta.date DESC';
-  res.json(db.prepare(sql).all(...params));
+  const where = {};
+  if (teacherId) where.teacher_id = teacherId;
+  if (date) where.date = date;
+  if (month) where.date = { startsWith: month };
+  const rows = await req.db.teacherAttendance.findMany({
+    where, include: { teacher: { select: { first_name: true, last_name: true } } }, orderBy: { date: 'desc' },
+  });
+  res.json(rows.map(({ teacher, ...rest }) => ({ ...rest, first_name: teacher?.first_name ?? null, last_name: teacher?.last_name ?? null })));
 });
 
 // POST /api/attendance/teachers
-router.post('/teachers', authenticate, (req, res) => {
+router.post('/teachers', authenticate, async (req, res) => {
   const records = req.body;
   if (!Array.isArray(records)) return res.status(422).json({ error: 'Body must be an array' });
-  const upsert = db.prepare(`
-    INSERT INTO teacher_attendance (id, teacher_id, date, status, remarks)
-    VALUES (?,?,?,?,?)
-    ON CONFLICT(teacher_id, date) DO UPDATE SET status=excluded.status, remarks=excluded.remarks
-  `);
-  db.transaction(() => records.forEach(r =>
-    upsert.run(r.id || uuid(), r.teacherId, r.date, r.status, r.remarks || null)
-  ))();
+
+  await req.db.$transaction(records.map(r => req.db.teacherAttendance.upsert({
+    where: { teacher_attendance_teacher_date: { teacher_id: r.teacherId, date: r.date } },
+    create: { id: r.id || uuid(), teacher_id: r.teacherId, date: r.date, status: r.status, remarks: r.remarks || null },
+    update: { status: r.status, remarks: r.remarks || null },
+  })));
   res.status(201).json({ saved: records.length });
 });
 

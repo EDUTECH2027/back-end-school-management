@@ -1,0 +1,605 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../../node_modules/.prisma/tenant-client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("TENANT_TEMPLATE_DATABASE_URL")
+}
+
+enum Role {
+  super_admin
+  head_teacher
+  teacher
+  student
+  parent
+}
+
+enum Gender {
+  male
+  female
+  other
+}
+
+enum AttendanceStatus {
+  present
+  absent
+  late
+  excused
+}
+
+enum TermName {
+  first
+  second
+  third
+}
+
+enum Day {
+  monday
+  tuesday
+  wednesday
+  thursday
+  friday
+}
+
+enum ReportCardStatus {
+  draft
+  finalized
+  published
+  printed
+}
+
+enum FeeStatus {
+  pending
+  partial
+  paid
+  overdue
+  waived
+}
+
+enum PayrollStatus {
+  draft
+  pending
+  paid
+}
+
+enum BehaviorCategory {
+  positive
+  negative
+  neutral
+}
+
+enum WithdrawalStatus {
+  pending
+  approved
+  rejected
+}
+
+enum ForumMessageType {
+  text
+  image
+  voice
+}
+
+// ── Users (auth) ──────────────────────────────────────────────────
+model User {
+  id                   String    @id
+  name                 String
+  email                String    @unique
+  password_hash        String
+  role                 Role
+  initials             String
+  teacher_id           String?
+  student_id           String?
+  parent_id            String?
+  must_change_password Boolean   @default(false)
+  created_at           DateTime? @default(now())
+  updated_at           DateTime? @default(now())
+
+  teacher Teacher? @relation("UserTeacherRef", fields: [teacher_id], references: [id], onDelete: SetNull)
+  student Student? @relation("UserStudentRef", fields: [student_id], references: [id], onDelete: SetNull)
+  parent  Parent?  @relation("UserParentRef", fields: [parent_id], references: [id], onDelete: SetNull)
+
+  teachers_linked         Teacher[]          @relation("TeacherUserRef")
+  students_linked         Student[]          @relation("StudentUserRef")
+  parents_linked          Parent[]           @relation("ParentUserRef")
+  announcements_authored  Announcement[]     @relation("AnnouncementAuthor")
+  email_alerts_sent       EmailAlert[]       @relation("EmailAlertSender")
+  forum_threads_authored  ForumThread[]      @relation("ForumThreadAuthor")
+  forum_messages_authored ForumMessage[]     @relation("ForumMessageAuthor")
+  behavior_logs_created   StudentBehavior[]  @relation("BehaviorCreatedBy")
+  withdrawals_reviewed    SalaryWithdrawal[] @relation("WithdrawalReviewedBy")
+
+  @@map("users")
+}
+
+// ── School (singleton profile row) ───────────────────────────────
+model School {
+  id           String    @id
+  name         String
+  code         String?
+  address      String?
+  phone        String?
+  email        String?
+  head_teacher String?
+  motto        String?
+  logo_url     String?
+  updated_at   DateTime? @default(now())
+
+  @@map("school")
+}
+
+model AcademicYear {
+  id         String  @id
+  label      String
+  start_date String
+  end_date   String
+  is_current Boolean @default(false)
+
+  terms Term[]
+
+  @@map("academic_years")
+}
+
+model Term {
+  id               String   @id
+  academic_year_id String
+  name             TermName
+  start_date       String
+  end_date         String
+  is_current       Boolean  @default(false)
+
+  academic_year AcademicYear @relation(fields: [academic_year_id], references: [id], onDelete: Cascade)
+  marks         Mark[]
+  report_cards  ReportCard[]
+
+  @@map("terms")
+}
+
+model GradeLevel {
+  id         String @id
+  name       String @unique
+  sort_order Int    @default(0)
+
+  classes Class[]
+
+  @@map("grade_levels")
+}
+
+model Subject {
+  id   String @id
+  name String @unique
+  code String @unique
+
+  marks               Mark[]
+  report_card_entries ReportCardEntry[]
+
+  @@map("subjects")
+}
+
+model Teacher {
+  id             String    @id
+  first_name     String
+  last_name      String
+  email          String    @unique
+  phone          String?
+  gender         Gender?
+  subjects       Json      @default("[]")
+  class_assigned String?
+  qualification  String?
+  join_date      String?
+  is_active      Boolean   @default(true)
+  user_id        String?
+  created_at     DateTime? @default(now())
+  updated_at     DateTime? @default(now())
+
+  user              User?               @relation("TeacherUserRef", fields: [user_id], references: [id], onDelete: SetNull)
+  users_referencing User[]              @relation("UserTeacherRef")
+  classes_led       Class[]             @relation("ClassTeacher")
+  schedule          TeacherSchedule[]
+  attendance        TeacherAttendance[]
+  payroll           TeacherPayroll[]
+  behavior_logs     StudentBehavior[]   @relation("BehaviorTeacher")
+  withdrawals       SalaryWithdrawal[]
+
+  @@map("teachers")
+}
+
+model Class {
+  id                 String    @id
+  grade_level_id     String?
+  grade_level_name   String?
+  name               String    @unique
+  capacity           Int       @default(40)
+  room               String?
+  class_teacher_id   String?
+  class_teacher_name String?
+  enrolled           Int       @default(0)
+  created_at         DateTime? @default(now())
+
+  grade_level        GradeLevel?        @relation(fields: [grade_level_id], references: [id])
+  class_teacher      Teacher?           @relation("ClassTeacher", fields: [class_teacher_id], references: [id], onDelete: SetNull)
+  students           Student[]
+  attendance_records AttendanceRecord[]
+  schedule           TeacherSchedule[]
+  marks              Mark[]
+  fee_records        FeeRecord[]
+  behavior_logs      StudentBehavior[]
+
+  @@map("classes")
+}
+
+model Student {
+  id                    String    @id
+  student_number        String    @unique
+  first_name            String
+  last_name             String
+  date_of_birth         String?
+  gender                Gender?
+  class_id              String?
+  class_name            String?
+  grade_level_name      String?
+  photo_url             String?
+  guardian_name         String?
+  guardian_phone        String?
+  guardian_relationship String?
+  admission_date        String?
+  is_active             Boolean   @default(true)
+  address               String?
+  user_id               String?
+  created_at            DateTime? @default(now())
+  updated_at            DateTime? @default(now())
+
+  class              Class?             @relation(fields: [class_id], references: [id], onDelete: SetNull)
+  user               User?              @relation("StudentUserRef", fields: [user_id], references: [id], onDelete: SetNull)
+  users_referencing  User[]             @relation("UserStudentRef")
+  parents            ParentStudent[]
+  attendance_records AttendanceRecord[]
+  marks              Mark[]
+  report_cards       ReportCard[]
+  fee_records        FeeRecord[]
+  behavior_logs      StudentBehavior[]
+
+  @@index([class_id])
+  @@map("students")
+}
+
+model Parent {
+  id           String    @id
+  name         String
+  email        String?
+  phone        String
+  relationship String?
+  address      String?
+  occupation   String?
+  user_id      String?
+  created_at   DateTime? @default(now())
+  updated_at   DateTime? @default(now())
+
+  user              User?           @relation("ParentUserRef", fields: [user_id], references: [id], onDelete: SetNull)
+  users_referencing User[]          @relation("UserParentRef")
+  children          ParentStudent[]
+
+  @@map("parents")
+}
+
+model ParentStudent {
+  parent_id  String
+  student_id String
+
+  parent  Parent  @relation(fields: [parent_id], references: [id], onDelete: Cascade)
+  student Student @relation(fields: [student_id], references: [id], onDelete: Cascade)
+
+  @@id([parent_id, student_id])
+  @@map("parent_students")
+}
+
+model AttendanceRecord {
+  id             String           @id
+  student_id     String
+  student_name   String?
+  student_number String?
+  class_id       String
+  class_name     String?
+  date           String
+  status         AttendanceStatus
+  remarks        String?
+  created_at     DateTime?        @default(now())
+
+  student Student @relation(fields: [student_id], references: [id], onDelete: Cascade)
+  class   Class   @relation(fields: [class_id], references: [id], onDelete: Cascade)
+
+  @@unique([student_id, date], name: "attendance_student_date")
+  @@index([date])
+  @@index([class_id])
+  @@map("attendance_records")
+}
+
+model TeacherAttendance {
+  id         String           @id
+  teacher_id String
+  date       String
+  status     AttendanceStatus
+  remarks    String?
+
+  teacher Teacher @relation(fields: [teacher_id], references: [id], onDelete: Cascade)
+
+  @@unique([teacher_id, date], name: "teacher_attendance_teacher_date")
+  @@map("teacher_attendance")
+}
+
+model TeacherSchedule {
+  id           String  @id
+  teacher_id   String
+  day          Day
+  period_key   String
+  period_label String?
+  time         String?
+  class_id     String
+  class_name   String?
+  subject_name String
+  room         String?
+
+  teacher Teacher @relation(fields: [teacher_id], references: [id], onDelete: Cascade)
+  class   Class   @relation(fields: [class_id], references: [id], onDelete: Cascade)
+
+  @@index([teacher_id])
+  @@map("teacher_schedule")
+}
+
+model Mark {
+  id             String    @id
+  student_id     String
+  student_name   String?
+  student_number String?
+  subject_id     String
+  subject_name   String?
+  term_id        String
+  class_id       String?
+  ca_score       Float     @default(0)
+  exam_score     Float     @default(0)
+  total_score    Float     @default(0)
+  grade          String?
+  remark         String?
+  created_at     DateTime? @default(now())
+  updated_at     DateTime? @default(now())
+
+  student Student @relation(fields: [student_id], references: [id], onDelete: Cascade)
+  subject Subject @relation(fields: [subject_id], references: [id], onDelete: Cascade)
+  term    Term    @relation(fields: [term_id], references: [id], onDelete: Cascade)
+  class   Class?  @relation(fields: [class_id], references: [id], onDelete: SetNull)
+
+  @@unique([student_id, subject_id, term_id], name: "marks_student_subject_term")
+  @@index([student_id])
+  @@index([term_id])
+  @@map("marks")
+}
+
+model ReportCard {
+  id                    String           @id
+  student_id            String
+  student_name          String?
+  student_number        String?
+  class_name            String?
+  grade_level_name      String?
+  term_id               String
+  term_name             String?
+  academic_year         String?
+  total_marks_obtained  Float            @default(0)
+  total_marks_possible  Float            @default(0)
+  percentage            Float            @default(0)
+  class_position        Int?
+  out_of                Int?
+  days_present          Int              @default(0)
+  days_absent           Int              @default(0)
+  total_school_days     Int              @default(0)
+  conduct               String?
+  class_teacher_comment String?
+  head_teacher_comment  String?
+  status                ReportCardStatus @default(draft)
+  created_at            DateTime?        @default(now())
+  updated_at            DateTime?        @default(now())
+
+  student Student           @relation(fields: [student_id], references: [id], onDelete: Cascade)
+  term    Term              @relation(fields: [term_id], references: [id], onDelete: Cascade)
+  entries ReportCardEntry[]
+
+  @@map("report_cards")
+}
+
+model ReportCardEntry {
+  id              String  @id
+  report_card_id  String
+  subject_id      String
+  subject_name    String?
+  ca_score        Float   @default(0)
+  exam_score      Float   @default(0)
+  total_score     Float   @default(0)
+  grade           String?
+  remark          String?
+  position        Int?
+  teacher_comment String?
+
+  report_card ReportCard @relation(fields: [report_card_id], references: [id], onDelete: Cascade)
+  subject     Subject    @relation(fields: [subject_id], references: [id], onDelete: Cascade)
+
+  @@map("report_card_entries")
+}
+
+model FeeRecord {
+  id             String    @id
+  student_id     String
+  student_name   String?
+  student_number String?
+  class_id       String?
+  class_name     String?
+  fee_name       String
+  academic_year  String?
+  amount_due     Float     @default(0)
+  amount_paid    Float     @default(0)
+  balance        Float     @default(0)
+  status         FeeStatus @default(pending)
+  due_date       String?
+  created_at     DateTime? @default(now())
+  updated_at     DateTime? @default(now())
+
+  student  Student   @relation(fields: [student_id], references: [id], onDelete: Cascade)
+  class    Class?    @relation(fields: [class_id], references: [id], onDelete: SetNull)
+  payments Payment[]
+
+  @@index([student_id])
+  @@map("fee_records")
+}
+
+model Payment {
+  id             String    @id
+  fee_record_id  String
+  amount         Float
+  method         String?
+  reference      String?
+  payment_date   String?
+  receipt_number String?
+  created_at     DateTime? @default(now())
+
+  fee_record FeeRecord @relation(fields: [fee_record_id], references: [id], onDelete: Cascade)
+
+  @@map("payments")
+}
+
+model TeacherPayroll {
+  id                String        @id
+  teacher_id        String
+  month             String
+  hourly_rate       Float         @default(3500)
+  contracted_hours  Float         @default(80)
+  base_allowance    Float         @default(50000)
+  absence_deduction Float         @default(12000)
+  late_deduction    Float         @default(2500)
+  hours_worked      Float         @default(0)
+  absences          Int           @default(0)
+  late_coming       Int           @default(0)
+  bonus             Float         @default(0)
+  notes             String?       @default("")
+  status            PayrollStatus @default(draft)
+  created_at        DateTime?     @default(now())
+  updated_at        DateTime?     @default(now())
+
+  teacher     Teacher            @relation(fields: [teacher_id], references: [id], onDelete: Cascade)
+  withdrawals SalaryWithdrawal[]
+
+  @@unique([teacher_id, month], name: "teacher_payroll_teacher_month")
+  @@index([month])
+  @@map("teacher_payroll")
+}
+
+model Announcement {
+  id         String    @id
+  title      String
+  body       String
+  author     String?
+  author_id  String?
+  audience   String?   @default("all")
+  is_pinned  Boolean   @default(false)
+  type       String?   @default("info")
+  created_at DateTime? @default(now())
+  updated_at DateTime? @default(now())
+
+  author_user User? @relation("AnnouncementAuthor", fields: [author_id], references: [id], onDelete: SetNull)
+
+  @@map("announcements")
+}
+
+model EmailAlert {
+  id        String    @id
+  subject   String
+  body      String
+  recipient String
+  sender    String?
+  sender_id String?
+  status    String    @default("sent")
+  sent_at   DateTime? @default(now())
+
+  sender_user User? @relation("EmailAlertSender", fields: [sender_id], references: [id], onDelete: SetNull)
+
+  @@map("email_alerts")
+}
+
+model ForumThread {
+  id            String    @id
+  title         String
+  tag           String?   @default("general")
+  author        String?
+  author_id     String?
+  is_pinned     Boolean   @default(false)
+  message_count Int       @default(0)
+  created_at    DateTime? @default(now())
+  updated_at    DateTime? @default(now())
+
+  author_user User?          @relation("ForumThreadAuthor", fields: [author_id], references: [id], onDelete: SetNull)
+  messages    ForumMessage[]
+
+  @@map("forum_threads")
+}
+
+model ForumMessage {
+  id             String           @id
+  thread_id      String
+  author         String
+  author_id      String?
+  type           ForumMessageType @default(text)
+  content        String?
+  image_url      String?
+  voice_url      String?
+  voice_duration Int?
+  created_at     DateTime?        @default(now())
+
+  thread      ForumThread @relation(fields: [thread_id], references: [id], onDelete: Cascade)
+  author_user User?       @relation("ForumMessageAuthor", fields: [author_id], references: [id], onDelete: SetNull)
+
+  @@map("forum_messages")
+}
+
+model StudentBehavior {
+  id           String           @id
+  student_id   String
+  class_id     String?
+  teacher_id   String?
+  date         String
+  category     BehaviorCategory
+  description  String
+  action_taken String?
+  created_by   String?
+  created_at   DateTime?        @default(now())
+  updated_at   DateTime?        @default(now())
+
+  student      Student  @relation(fields: [student_id], references: [id], onDelete: Cascade)
+  class        Class?   @relation(fields: [class_id], references: [id], onDelete: SetNull)
+  teacher      Teacher? @relation("BehaviorTeacher", fields: [teacher_id], references: [id], onDelete: SetNull)
+  created_user User?    @relation("BehaviorCreatedBy", fields: [created_by], references: [id], onDelete: SetNull)
+
+  @@index([student_id])
+  @@index([class_id])
+  @@map("student_behavior")
+}
+
+model SalaryWithdrawal {
+  id          String           @id
+  teacher_id  String
+  payroll_id  String?
+  amount      Float
+  reason      String?
+  status      WithdrawalStatus @default(pending)
+  reviewed_by String?
+  reviewed_at String?
+  notes       String?
+  created_at  DateTime?        @default(now())
+  updated_at  DateTime?        @default(now())
+
+  teacher  Teacher         @relation(fields: [teacher_id], references: [id], onDelete: Cascade)
+  payroll  TeacherPayroll? @relation(fields: [payroll_id], references: [id], onDelete: SetNull)
+  reviewer User?           @relation("WithdrawalReviewedBy", fields: [reviewed_by], references: [id], onDelete: SetNull)
+
+  @@index([teacher_id])
+  @@map("salary_withdrawals")
+}

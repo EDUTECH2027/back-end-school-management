@@ -1,5 +1,4 @@
 const router = require('express').Router();
-const db = require('../db/database');
 const authenticate = require('../middleware/auth');
 const { v4: uuid } = require('uuid');
 
@@ -13,35 +12,29 @@ const gradeFor = (score) => {
 };
 
 // GET /api/marks?termId=t1&classId=c4&studentId=st6&subjectId=sub1
-router.get('/', authenticate, (req, res) => {
+router.get('/', authenticate, async (req, res) => {
   const { termId, classId, studentId, subjectId } = req.query;
-  let sql = 'SELECT * FROM marks WHERE 1=1';
-  const params = [];
-  if (termId)    { sql += ' AND term_id=?';    params.push(termId); }
-  if (classId)   { sql += ' AND class_id=?';   params.push(classId); }
-  if (studentId) { sql += ' AND student_id=?'; params.push(studentId); }
-  if (subjectId) { sql += ' AND subject_id=?'; params.push(subjectId); }
-  const stmt = db.prepare(sql);
-  res.json(params.length ? stmt.all(...params) : stmt.all());
+  const where = {};
+  if (termId) where.term_id = termId;
+  if (classId) where.class_id = classId;
+  if (studentId) where.student_id = studentId;
+  if (subjectId) where.subject_id = subjectId;
+  res.json(await req.db.mark.findMany({ where }));
 });
 
 // POST /api/marks  — bulk upsert
-router.post('/', authenticate, (req, res) => {
+router.post('/', authenticate, async (req, res) => {
   const records = req.body;
   if (!Array.isArray(records)) return res.status(422).json({ error: 'Body must be an array' });
   if (records.length === 0) return res.status(201).json({ saved: 0 });
-
-  const find   = db.prepare('SELECT id FROM marks WHERE student_id=? AND subject_id=? AND term_id=?');
-  const update = db.prepare('UPDATE marks SET ca_score=?,exam_score=?,total_score=?,grade=?,remark=? WHERE id=?');
-  const insert = db.prepare('INSERT INTO marks (id,student_id,student_name,student_number,subject_id,subject_name,term_id,class_id,ca_score,exam_score,total_score,grade,remark) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)');
 
   // Validate that the referenced term and subject exist before starting inserts.
   // This gives a clear error instead of a cryptic FK constraint message.
   const firstRecord = records.find(r => r.termId && r.subjectId);
   if (firstRecord) {
-    const termExists    = db.prepare('SELECT 1 FROM terms WHERE id=?').get(firstRecord.termId);
-    const subjectExists = db.prepare('SELECT 1 FROM subjects WHERE id=?').get(firstRecord.subjectId);
-    if (!termExists)    return res.status(422).json({ error: `Term not found: ${firstRecord.termId}` });
+    const termExists = await req.db.term.findUnique({ where: { id: firstRecord.termId } });
+    const subjectExists = await req.db.subject.findUnique({ where: { id: firstRecord.subjectId } });
+    if (!termExists) return res.status(422).json({ error: `Term not found: ${firstRecord.termId}` });
     if (!subjectExists) return res.status(422).json({ error: `Subject not found: ${firstRecord.subjectId}` });
   }
 
@@ -52,14 +45,15 @@ router.post('/', authenticate, (req, res) => {
     try {
       const total = Math.round(((r.caScore || 0) + (r.examScore || 0)) / 2);
       const { grade, remark } = gradeFor(total);
-      const existing = find.get(r.studentId, r.subjectId, r.termId);
-      if (existing) {
-        update.run(r.caScore||0, r.examScore||0, total, r.grade||grade, r.remark||remark, existing.id);
-      } else {
-        insert.run(r.id||uuid(), r.studentId, r.studentName||null, r.studentNumber||null,
-          r.subjectId, r.subjectName||null, r.termId, r.classId||null,
-          r.caScore||0, r.examScore||0, total, r.grade||grade, r.remark||remark);
-      }
+      await req.db.mark.upsert({
+        where: { marks_student_subject_term: { student_id: r.studentId, subject_id: r.subjectId, term_id: r.termId } },
+        update: { ca_score: r.caScore || 0, exam_score: r.examScore || 0, total_score: total, grade: r.grade || grade, remark: r.remark || remark, updated_at: new Date() },
+        create: {
+          id: r.id || uuid(), student_id: r.studentId, student_name: r.studentName || null, student_number: r.studentNumber || null,
+          subject_id: r.subjectId, subject_name: r.subjectName || null, term_id: r.termId, class_id: r.classId || null,
+          ca_score: r.caScore || 0, exam_score: r.examScore || 0, total_score: total, grade: r.grade || grade, remark: r.remark || remark,
+        },
+      });
       saved++;
     } catch (err) {
       console.error(`[POST /api/marks] record skipped (${r.studentId}/${r.subjectId}):`, err.message);
@@ -74,13 +68,15 @@ router.post('/', authenticate, (req, res) => {
 });
 
 // PUT /api/marks/:id
-router.put('/:id', authenticate, (req, res) => {
+router.put('/:id', authenticate, async (req, res) => {
   const { caScore, examScore, grade, remark } = req.body;
-  const total = Math.round(((caScore||0) + (examScore||0)) / 2);
-  const auto  = gradeFor(total);
-  db.prepare(`UPDATE marks SET ca_score=?,exam_score=?,total_score=?,grade=?,remark=? WHERE id=?`)
-    .run(caScore||0, examScore||0, total, grade||auto.grade, remark||auto.remark, req.params.id);
-  res.json(db.prepare('SELECT * FROM marks WHERE id=?').get(req.params.id));
+  const total = Math.round(((caScore || 0) + (examScore || 0)) / 2);
+  const auto = gradeFor(total);
+  const updated = await req.db.mark.update({
+    where: { id: req.params.id },
+    data: { ca_score: caScore || 0, exam_score: examScore || 0, total_score: total, grade: grade || auto.grade, remark: remark || auto.remark, updated_at: new Date() },
+  });
+  res.json(updated);
 });
 
 module.exports = router;

@@ -1,8 +1,8 @@
 const jwt = require('jsonwebtoken');
-const { ALS } = require('../db/tenantContext');
-const platformDb = require('../db/platform');
+const platformClient = require('../db/platformClient');
+const tenantPool = require('../db/tenantPool');
 
-module.exports = function authenticate(req, res, next) {
+module.exports = async function authenticate(req, res, next) {
   const header = req.headers['authorization'];
   if (!header || !header.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Missing or invalid Authorization header' });
@@ -20,10 +20,14 @@ module.exports = function authenticate(req, res, next) {
     return res.status(403).json({ error: 'Forbidden' });
   }
 
-  const school = platformDb.prepare('SELECT status FROM schools WHERE id = ?').get(payload.school_id);
+  const school = await platformClient.school.findUnique({
+    where: { id: payload.school_id },
+    select: { status: true },
+  });
   if (!school) return res.status(404).json({ error: 'School not found' });
   if (school.status !== 'active') return res.status(403).json({ error: 'School account is not active' });
 
   req.user = payload;
-  ALS.run({ schoolId: payload.school_id }, next);
+  req.db = tenantPool.getOrOpen(payload.school_id);
+  next();
 };

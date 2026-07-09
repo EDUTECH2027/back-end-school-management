@@ -1,4 +1,5 @@
 require('dotenv').config();
+require('express-async-errors');
 const path      = require('path');
 const express   = require('express');
 const cors      = require('cors');
@@ -7,37 +8,30 @@ const morgan    = require('morgan');
 const bcrypt    = require('bcryptjs');
 const { v4: uuid } = require('uuid');
 
-const platformDb = require('./db/platform');
-const { createPlatformSchema } = require('./db/platformSchema');
-const { createSchema } = require('./db/schema');
-const tenantContext = require('./db/tenantContext');
+const platformClient = require('./db/platformClient');
+const { provisionTenantSchema } = require('./db/provisionTenant');
 const errorHandler = require('./middleware/errorHandler');
 
-// ── Bootstrap platform registry DB ─────────────────────────────────────────────
-createPlatformSchema(platformDb);
+async function bootstrap() {
+  // ── Bootstrap a first platform admin if none exists ────────────────────────
+  const platformAdminCount = await platformClient.platformAdmin.count();
+  if (platformAdminCount === 0) {
+    const email = process.env.PLATFORM_ADMIN_EMAIL || 'superadmin@platform.local';
+    const password = process.env.PLATFORM_ADMIN_PASSWORD || 'SuperAdmin@2025';
+    await platformClient.platformAdmin.create({
+      data: { id: uuid(), name: 'Super Admin', email, password_hash: bcrypt.hashSync(password, 10), role: 'platform_owner', initials: 'SA' },
+    });
+    console.log(`[server] Bootstrapped platform owner account: ${email} / ${password}`);
+  }
 
-// ── Bootstrap a first platform admin if none exists ────────────────────────────
-function bootstrapPlatformAdmin() {
-  const { n } = platformDb.prepare('SELECT COUNT(*) AS n FROM platform_admins').get();
-  if (n > 0) return;
-
-  const email = process.env.PLATFORM_ADMIN_EMAIL || 'superadmin@platform.local';
-  const password = process.env.PLATFORM_ADMIN_PASSWORD || 'SuperAdmin@2025';
-  platformDb.prepare(`
-    INSERT INTO platform_admins (id, name, email, password_hash, role, initials, created_at, updated_at)
-    VALUES (?, 'Super Admin', ?, ?, 'platform_owner', 'SA', datetime('now'), datetime('now'))
-  `).run(uuid(), email, bcrypt.hashSync(password, 10));
-
-  console.log(`[server] Bootstrapped platform owner account: ${email} / ${password}`);
-}
-bootstrapPlatformAdmin();
-
-// ── Run pending tenant-schema migrations for every registered school on boot ───
-for (const school of platformDb.prepare('SELECT id FROM schools').all()) {
-  try {
-    tenantContext.runWithTenant(school.id, () => createSchema(require('./db/database')));
-  } catch (e) {
-    console.error(`[server] Failed to migrate tenant ${school.id}:`, e.message);
+  // ── Bring every registered school's tenant schema up to date on boot ───────
+  const schools = await platformClient.school.findMany({ select: { id: true } });
+  for (const school of schools) {
+    try {
+      await provisionTenantSchema(school.id);
+    } catch (e) {
+      console.error(`[server] Failed to migrate tenant ${school.id}:`, e.message);
+    }
   }
 }
 
@@ -153,12 +147,19 @@ app.use(errorHandler);
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 const HOST = process.env.HOST || '0.0.0.0';
-app.listen(PORT, HOST, () => {
-  console.log(`\n🚀  School Management API running on http://localhost:${PORT}`);
-  console.log(`   Health: http://localhost:${PORT}/api/health`);
-  console.log(`   Docs:   see README for full endpoint list\n`);
-  // Signal Electron main process that the server is ready
-  if (process.send) process.send({ type: 'ready', port: Number(PORT) });
-});
+bootstrap()
+  .then(() => {
+    app.listen(PORT, HOST, () => {
+      console.log(`\n🚀  School Management API running on http://localhost:${PORT}`);
+      console.log(`   Health: http://localhost:${PORT}/api/health`);
+      console.log(`   Docs:   see README for full endpoint list\n`);
+      // Signal Electron main process that the server is ready
+      if (process.send) process.send({ type: 'ready', port: Number(PORT) });
+    });
+  })
+  .catch((e) => {
+    console.error('[server] Bootstrap failed:', e);
+    process.exit(1);
+  });
 
 module.exports = app;

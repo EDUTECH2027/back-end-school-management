@@ -1,53 +1,65 @@
 const router = require('express').Router();
-const db = require('../db/database');
 const authenticate = require('../middleware/auth');
 const { v4: uuid } = require('uuid');
 
-const parse = row => row ? { ...row, subjects: JSON.parse(row.subjects || '[]'), isActive: !!row.is_active } : null;
+const parse = row => row ? { ...row, isActive: !!row.is_active } : null;
 
 // GET /api/teachers
-router.get('/', authenticate, (req, res) => {
+router.get('/', authenticate, async (req, res) => {
   const { search, isActive } = req.query;
-  let sql = 'SELECT * FROM teachers WHERE 1=1';
-  const params = [];
-  if (search) { sql += ' AND (first_name LIKE ? OR last_name LIKE ? OR email LIKE ?)'; const s = `%${search}%`; params.push(s,s,s); }
-  if (isActive !== undefined) { sql += ' AND is_active=?'; params.push(isActive === 'true' ? 1 : 0); }
-  sql += ' ORDER BY first_name';
-  res.json(db.prepare(sql).all(...params).map(parse));
+  const where = {};
+  if (search) {
+    where.OR = [
+      { first_name: { contains: search, mode: 'insensitive' } },
+      { last_name: { contains: search, mode: 'insensitive' } },
+      { email: { contains: search, mode: 'insensitive' } },
+    ];
+  }
+  if (isActive !== undefined) where.is_active = isActive === 'true';
+  const rows = await req.db.teacher.findMany({ where, orderBy: { first_name: 'asc' } });
+  res.json(rows.map(parse));
 });
 
 // GET /api/teachers/:id
-router.get('/:id', authenticate, (req, res) => {
-  const row = db.prepare('SELECT * FROM teachers WHERE id=?').get(req.params.id);
+router.get('/:id', authenticate, async (req, res) => {
+  const row = await req.db.teacher.findUnique({ where: { id: req.params.id } });
   if (!row) return res.status(404).json({ error: 'Teacher not found' });
   res.json(parse(row));
 });
 
 // POST /api/teachers
-router.post('/', authenticate, (req, res) => {
+router.post('/', authenticate, async (req, res) => {
   const { firstName, lastName, email, phone, gender, subjects, classAssigned, qualification, joinDate } = req.body;
   if (!firstName || !lastName || !email) return res.status(422).json({ error: 'firstName, lastName and email required' });
   const id = uuid();
-  db.prepare(`INSERT INTO teachers (id,first_name,last_name,email,phone,gender,subjects,class_assigned,qualification,join_date,is_active,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,datetime('now'),datetime('now'))`)
-    .run(id, firstName, lastName, email, phone||null, gender||null,
-         JSON.stringify(subjects||[]), classAssigned||null, qualification||null, joinDate||null, 1);
-  res.status(201).json(parse(db.prepare('SELECT * FROM teachers WHERE id=?').get(id)));
+  const created = await req.db.teacher.create({
+    data: {
+      id, first_name: firstName, last_name: lastName, email, phone: phone || null, gender: gender || null,
+      subjects: JSON.stringify(subjects || []), class_assigned: classAssigned || null,
+      qualification: qualification || null, join_date: joinDate || null, is_active: true,
+    },
+  });
+  res.status(201).json(parse(created));
 });
 
 // PUT /api/teachers/:id
-router.put('/:id', authenticate, (req, res) => {
+router.put('/:id', authenticate, async (req, res) => {
   const { firstName, lastName, email, phone, gender, subjects, classAssigned, qualification, joinDate, isActive } = req.body;
-  db.prepare(`UPDATE teachers SET first_name=?,last_name=?,email=?,phone=?,gender=?,subjects=?,
-    class_assigned=?,qualification=?,join_date=?,is_active=?,updated_at=datetime('now') WHERE id=?`)
-    .run(firstName, lastName, email, phone||null, gender||null,
-         JSON.stringify(subjects||[]), classAssigned||null, qualification||null,
-         joinDate||null, isActive !== false ? 1 : 0, req.params.id);
-  res.json(parse(db.prepare('SELECT * FROM teachers WHERE id=?').get(req.params.id)));
+  const updated = await req.db.teacher.update({
+    where: { id: req.params.id },
+    data: {
+      first_name: firstName, last_name: lastName, email, phone: phone || null, gender: gender || null,
+      subjects: JSON.stringify(subjects || []), class_assigned: classAssigned || null,
+      qualification: qualification || null, join_date: joinDate || null,
+      is_active: isActive !== false, updated_at: new Date(),
+    },
+  });
+  res.json(parse(updated));
 });
 
 // DELETE /api/teachers/:id  (soft delete)
-router.delete('/:id', authenticate, (req, res) => {
-  db.prepare("UPDATE teachers SET is_active=0, updated_at=datetime('now') WHERE id=?").run(req.params.id);
+router.delete('/:id', authenticate, async (req, res) => {
+  await req.db.teacher.updateMany({ where: { id: req.params.id }, data: { is_active: false, updated_at: new Date() } });
   res.status(204).end();
 });
 

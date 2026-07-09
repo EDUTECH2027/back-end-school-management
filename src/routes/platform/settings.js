@@ -1,5 +1,5 @@
 const router = require('express').Router();
-const platformDb = require('../../db/platform');
+const platformClient = require('../../db/platformClient');
 const authenticatePlatform = require('../../middleware/authenticatePlatform');
 const authorizePlatform = require('../../middleware/authorizePlatform');
 const { logAction } = require('./_helpers');
@@ -7,26 +7,27 @@ const { logAction } = require('./_helpers');
 const guard = [authenticatePlatform, authorizePlatform()];
 
 // GET /api/platform/settings
-router.get('/', ...guard, (req, res) => {
-  res.json(platformDb.prepare("SELECT * FROM platform_settings WHERE id='p1'").get());
+router.get('/', ...guard, async (req, res) => {
+  res.json(await platformClient.platformSetting.findUnique({ where: { id: 'p1' } }));
 });
 
 // PUT /api/platform/settings
-router.put('/', ...guard, (req, res) => {
-  const current = platformDb.prepare("SELECT * FROM platform_settings WHERE id='p1'").get();
+router.put('/', ...guard, async (req, res) => {
+  const current = await platformClient.platformSetting.findUnique({ where: { id: 'p1' } });
   const { platform_name, logo_url, support_email, default_plan_id } = req.body;
-  platformDb.prepare(`
-    UPDATE platform_settings SET platform_name=?, logo_url=?, support_email=?, default_plan_id=?, updated_at=datetime('now')
-    WHERE id='p1'
-  `).run(
-    platform_name ?? current.platform_name,
-    logo_url ?? current.logo_url,
-    support_email ?? current.support_email,
-    default_plan_id ?? current.default_plan_id
-  );
+  const updated = await platformClient.platformSetting.update({
+    where: { id: 'p1' },
+    data: {
+      platform_name: platform_name ?? current.platform_name,
+      logo_url: logo_url ?? current.logo_url,
+      support_email: support_email ?? current.support_email,
+      default_plan_id: default_plan_id ?? current.default_plan_id,
+      updated_at: new Date(),
+    },
+  });
 
-  logAction(req, 'settings.updated', 'platform_settings', 'p1', {});
-  res.json(platformDb.prepare("SELECT * FROM platform_settings WHERE id='p1'").get());
+  await logAction(req, 'settings.updated', 'platform_settings', 'p1', {});
+  res.json(updated);
 });
 
 module.exports = router;

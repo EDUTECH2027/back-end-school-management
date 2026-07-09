@@ -1,28 +1,27 @@
 const router = require('express').Router();
-const db = require('../db/database');
 const authenticate = require('../middleware/auth');
 const { v4: uuid } = require('uuid');
 
-router.get('/', authenticate, (_req, res) => {
-  res.json(db.prepare('SELECT * FROM subjects ORDER BY name').all());
+router.get('/', authenticate, async (req, res) => {
+  res.json(await req.db.subject.findMany({ orderBy: { name: 'asc' } }));
 });
 
-router.post('/', authenticate, (req, res) => {
+router.post('/', authenticate, async (req, res) => {
   const { name, code } = req.body;
   if (!name || !code) return res.status(422).json({ error: 'name and code required' });
   const id = uuid();
-  db.prepare('INSERT INTO subjects VALUES (?,?,?)').run(id, name, code);
-  res.status(201).json(db.prepare('SELECT * FROM subjects WHERE id=?').get(id));
+  const created = await req.db.subject.create({ data: { id, name, code } });
+  res.status(201).json(created);
 });
 
-router.put('/:id', authenticate, (req, res) => {
+router.put('/:id', authenticate, async (req, res) => {
   const { name, code } = req.body;
-  db.prepare('UPDATE subjects SET name=?,code=? WHERE id=?').run(name, code, req.params.id);
-  res.json(db.prepare('SELECT * FROM subjects WHERE id=?').get(req.params.id));
+  const updated = await req.db.subject.update({ where: { id: req.params.id }, data: { name, code } });
+  res.json(updated);
 });
 
-router.delete('/:id', authenticate, (req, res) => {
-  db.prepare('DELETE FROM subjects WHERE id=?').run(req.params.id);
+router.delete('/:id', authenticate, async (req, res) => {
+  await req.db.subject.deleteMany({ where: { id: req.params.id } });
   res.status(204).end();
 });
 

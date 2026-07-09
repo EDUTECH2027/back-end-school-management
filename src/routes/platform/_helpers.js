@@ -1,20 +1,19 @@
 const { v4: uuid } = require('uuid');
-const platformDb = require('../../db/platform');
+const platformClient = require('../../db/platformClient');
 
-function logAction(req, action, targetType, targetId, meta) {
-  platformDb.prepare(`
-    INSERT INTO system_logs (id, actor_type, actor_id, actor_name, action, target_type, target_id, meta, created_at)
-    VALUES (?,?,?,?,?,?,?,?,datetime('now'))
-  `).run(
-    uuid(),
-    'platform_admin',
-    req.user?.id || null,
-    req.user?.name || null,
-    action,
-    targetType || null,
-    targetId || null,
-    meta ? JSON.stringify(meta) : null
-  );
+async function logAction(req, action, targetType, targetId, meta) {
+  await platformClient.systemLog.create({
+    data: {
+      id: uuid(),
+      actor_type: 'platform_admin',
+      actor_id: req.user?.id || null,
+      actor_name: req.user?.name || null,
+      action,
+      target_type: targetType || null,
+      target_id: targetId || null,
+      meta: meta ? JSON.stringify(meta) : null,
+    },
+  });
 }
 
 module.exports = { logAction };

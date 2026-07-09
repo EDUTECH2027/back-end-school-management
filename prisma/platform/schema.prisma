@@ -1,0 +1,146 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../../node_modules/.prisma/platform-client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("PLATFORM_DATABASE_URL")
+}
+
+enum BillingCycle {
+  monthly
+  yearly
+}
+
+enum SchoolStatus {
+  active
+  inactive
+  suspended
+  archived
+}
+
+enum PlatformRole {
+  platform_owner
+  platform_admin
+}
+
+enum LogActorType {
+  platform_admin
+  system
+}
+
+model SubscriptionPlan {
+  id            String       @id
+  name          String       @unique
+  price         Float        @default(0)
+  billing_cycle BillingCycle @default(monthly)
+  max_students  Int?
+  max_teachers  Int?
+  features      Json         @default("[]")
+  is_custom     Boolean      @default(false)
+  created_at    DateTime?    @default(now())
+  updated_at    DateTime?    @default(now())
+
+  schools          School[]
+  default_settings PlatformSetting[]
+
+  @@map("subscription_plans")
+}
+
+model School {
+  id                   String       @id
+  name                 String
+  code                 String?
+  address              String?
+  phone                String?
+  email                String
+  admin_name           String
+  admin_email          String
+  plan_id              String?
+  status               SchoolStatus @default(active)
+  subscription_started DateTime?    @default(now())
+  subscription_expiry  DateTime?
+  created_at           DateTime?    @default(now())
+  updated_at           DateTime?    @default(now())
+
+  plan      SubscriptionPlan? @relation(fields: [plan_id], references: [id], onDelete: SetNull)
+  directory UserDirectory[]
+
+  @@index([status])
+  @@index([plan_id])
+  @@map("schools")
+}
+
+model PlatformAdmin {
+  id            String       @id
+  name          String
+  email         String       @unique
+  password_hash String
+  role          PlatformRole @default(platform_admin)
+  initials      String
+  created_at    DateTime?    @default(now())
+  updated_at    DateTime?    @default(now())
+
+  @@map("platform_admins")
+}
+
+model UserDirectory {
+  email      String    @id
+  school_id  String
+  role       String?
+  updated_at DateTime? @default(now())
+
+  school School @relation(fields: [school_id], references: [id], onDelete: Cascade)
+
+  @@index([school_id])
+  @@map("user_directory")
+}
+
+model SystemLog {
+  id          String       @id
+  actor_type  LogActorType @default(platform_admin)
+  actor_id    String?
+  actor_name  String?
+  action      String
+  target_type String?
+  target_id   String?
+  meta        Json?
+  created_at  DateTime?    @default(now())
+
+  @@index([created_at])
+  @@map("system_logs")
+}
+
+model PlatformAnnouncement {
+  id         String    @id
+  title      String
+  body       String
+  is_pinned  Boolean   @default(false)
+  created_at DateTime? @default(now())
+  updated_at DateTime? @default(now())
+
+  @@map("platform_announcements")
+}
+
+model PlatformSetting {
+  id              String    @id
+  platform_name   String    @default("School Management System")
+  logo_url        String?
+  support_email   String?
+  default_plan_id String?
+  updated_at      DateTime? @default(now())
+
+  default_plan SubscriptionPlan? @relation(fields: [default_plan_id], references: [id], onDelete: SetNull)
+
+  @@map("platform_settings")
+}
+
+model Feature {
+  id          String  @id
+  key         String  @unique
+  label       String
+  description String?
+
+  @@map("features")
+}

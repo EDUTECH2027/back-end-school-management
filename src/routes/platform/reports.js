@@ -1,30 +1,36 @@
 const router = require('express').Router();
-const platformDb = require('../../db/platform');
+const platformClient = require('../../db/platformClient');
 const authenticatePlatform = require('../../middleware/authenticatePlatform');
 const authorizePlatform = require('../../middleware/authorizePlatform');
 
 const guard = [authenticatePlatform, authorizePlatform()];
 
 // GET /api/platform/reports/schools-by-status
-router.get('/schools-by-status', ...guard, (req, res) => {
-  res.json(platformDb.prepare('SELECT status, COUNT(*) as count FROM schools GROUP BY status').all());
+router.get('/schools-by-status', ...guard, async (req, res) => {
+  const rows = await platformClient.school.groupBy({ by: ['status'], _count: { _all: true } });
+  res.json(rows.map(r => ({ status: r.status, count: r._count._all })));
 });
 
 // GET /api/platform/reports/revenue-by-plan
-router.get('/revenue-by-plan', ...guard, (req, res) => {
-  res.json(platformDb.prepare(`
-    SELECT p.name as plan_name, p.price, COUNT(s.id) as school_count, p.price * COUNT(s.id) as revenue
-    FROM subscription_plans p LEFT JOIN schools s ON s.plan_id = p.id AND s.status = 'active'
-    GROUP BY p.id ORDER BY revenue DESC
-  `).all());
+router.get('/revenue-by-plan', ...guard, async (req, res) => {
+  const plans = await platformClient.subscriptionPlan.findMany({
+    include: { schools: { where: { status: 'active' }, select: { id: true } } },
+  });
+  const rows = plans
+    .map(p => ({ plan_name: p.name, price: p.price, school_count: p.schools.length, revenue: p.price * p.schools.length }))
+    .sort((a, b) => b.revenue - a.revenue);
+  res.json(rows);
 });
 
 // GET /api/platform/reports/signups-by-month
-router.get('/signups-by-month', ...guard, (req, res) => {
-  res.json(platformDb.prepare(`
-    SELECT substr(created_at, 1, 7) as month, COUNT(*) as count
-    FROM schools GROUP BY month ORDER BY month
-  `).all());
+router.get('/signups-by-month', ...guard, async (req, res) => {
+  const schools = await platformClient.school.findMany({ select: { created_at: true } });
+  const byMonth = new Map();
+  for (const s of schools) {
+    const month = (s.created_at instanceof Date ? s.created_at.toISOString() : String(s.created_at || '')).slice(0, 7);
+    byMonth.set(month, (byMonth.get(month) || 0) + 1);
+  }
+  res.json([...byMonth.entries()].map(([month, count]) => ({ month, count })).sort((a, b) => a.month.localeCompare(b.month)));
 });
 
 module.exports = router;

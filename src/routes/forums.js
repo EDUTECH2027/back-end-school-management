@@ -1,62 +1,64 @@
 const router = require('express').Router();
-const db = require('../db/database');
 const authenticate = require('../middleware/auth');
 const { v4: uuid } = require('uuid');
 
 // ── Threads ─────────────────────────────────────────────────────────
 
-router.get('/threads', authenticate, (req, res) => {
+router.get('/threads', authenticate, async (req, res) => {
   const { tag } = req.query;
-  let sql = `SELECT ft.*,
-    (SELECT COUNT(*) FROM forum_messages fm WHERE fm.thread_id=ft.id) as message_count
-    FROM forum_threads ft WHERE 1=1`;
-  const params = [];
-  if (tag) { sql += ' AND ft.tag=?'; params.push(tag); }
-  sql += ' ORDER BY ft.is_pinned DESC, ft.updated_at DESC';
-  res.json(db.prepare(sql).all(...params));
+  const where = tag ? { tag } : {};
+  const threads = await req.db.forumThread.findMany({
+    where, orderBy: [{ is_pinned: 'desc' }, { updated_at: 'desc' }],
+    include: { _count: { select: { messages: true } } },
+  });
+  res.json(threads.map(t => ({ ...t, message_count: t._count.messages, _count: undefined })));
 });
 
-router.get('/threads/:id', authenticate, (req, res) => {
-  const thread = db.prepare('SELECT * FROM forum_threads WHERE id=?').get(req.params.id);
+router.get('/threads/:id', authenticate, async (req, res) => {
+  const thread = await req.db.forumThread.findUnique({ where: { id: req.params.id } });
   if (!thread) return res.status(404).json({ error: 'Thread not found' });
   res.json(thread);
 });
 
-router.post('/threads', authenticate, (req, res) => {
+router.post('/threads', authenticate, async (req, res) => {
   const { title, tag } = req.body;
   if (!title) return res.status(422).json({ error: 'title required' });
   const id = uuid();
-  db.prepare(`INSERT INTO forum_threads VALUES (?,?,?,?,?,?,?,datetime('now'),datetime('now'))`)
-    .run(id, title, tag||'general', req.user.name, req.user.id, 0, 0);
-  res.status(201).json(db.prepare('SELECT * FROM forum_threads WHERE id=?').get(id));
+  const created = await req.db.forumThread.create({
+    data: { id, title, tag: tag || 'general', author: req.user.name, author_id: req.user.id, is_pinned: false, message_count: 0 },
+  });
+  res.status(201).json(created);
 });
 
-router.delete('/threads/:id', authenticate, (req, res) => {
-  db.prepare('DELETE FROM forum_threads WHERE id=?').run(req.params.id);
+router.delete('/threads/:id', authenticate, async (req, res) => {
+  await req.db.forumThread.deleteMany({ where: { id: req.params.id } });
   res.status(204).end();
 });
 
 // ── Messages ─────────────────────────────────────────────────────────
 
-router.get('/threads/:id/messages', authenticate, (req, res) => {
-  const rows = db.prepare('SELECT * FROM forum_messages WHERE thread_id=? ORDER BY created_at').all(req.params.id);
-  res.json(rows);
+router.get('/threads/:id/messages', authenticate, async (req, res) => {
+  res.json(await req.db.forumMessage.findMany({ where: { thread_id: req.params.id }, orderBy: { created_at: 'asc' } }));
 });
 
-router.post('/threads/:id/messages', authenticate, (req, res) => {
+router.post('/threads/:id/messages', authenticate, async (req, res) => {
   const { type = 'text', content, imageUrl, voiceUrl, voiceDuration } = req.body;
   if (type === 'text' && !content) return res.status(422).json({ error: 'content required for text messages' });
   const msgId = uuid();
-  db.prepare(`INSERT INTO forum_messages VALUES (?,?,?,?,?,?,?,?,?,datetime('now'))`)
-    .run(msgId, req.params.id, req.user.name, req.user.id, type, content||null, imageUrl||null, voiceUrl||null, voiceDuration||null);
+  const created = await req.db.forumMessage.create({
+    data: {
+      id: msgId, thread_id: req.params.id, author: req.user.name, author_id: req.user.id,
+      type, content: content || null, image_url: imageUrl || null, voice_url: voiceUrl || null, voice_duration: voiceDuration || null,
+    },
+  });
   // bump thread updated_at and message_count
-  db.prepare(`UPDATE forum_threads SET updated_at=datetime('now'), message_count=(SELECT COUNT(*) FROM forum_messages WHERE thread_id=?) WHERE id=?`)
-    .run(req.params.id, req.params.id);
-  res.status(201).json(db.prepare('SELECT * FROM forum_messages WHERE id=?').get(msgId));
+  const count = await req.db.forumMessage.count({ where: { thread_id: req.params.id } });
+  await req.db.forumThread.update({ where: { id: req.params.id }, data: { updated_at: new Date(), message_count: count } });
+  res.status(201).json(created);
 });
 
-router.delete('/threads/:threadId/messages/:msgId', authenticate, (req, res) => {
-  db.prepare('DELETE FROM forum_messages WHERE id=? AND thread_id=?').run(req.params.msgId, req.params.threadId);
+router.delete('/threads/:threadId/messages/:msgId', authenticate, async (req, res) => {
+  await req.db.forumMessage.deleteMany({ where: { id: req.params.msgId, thread_id: req.params.threadId } });
   res.status(204).end();
 });
 

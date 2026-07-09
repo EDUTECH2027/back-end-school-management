@@ -1,29 +1,27 @@
 const router = require('express').Router();
-const db = require('../db/database');
 const authenticate = require('../middleware/auth');
 const { v4: uuid } = require('uuid');
 
-router.get('/', authenticate, (req, res) => {
+router.get('/', authenticate, async (req, res) => {
   const { status, recipient } = req.query;
-  let sql = 'SELECT * FROM email_alerts WHERE 1=1';
-  const params = [];
-  if (status)    { sql += ' AND status=?';    params.push(status); }
-  if (recipient) { sql += ' AND recipient LIKE ?'; params.push(`%${recipient}%`); }
-  sql += ' ORDER BY sent_at DESC';
-  res.json(db.prepare(sql).all(...params));
+  const where = {};
+  if (status) where.status = status;
+  if (recipient) where.recipient = { contains: recipient, mode: 'insensitive' };
+  res.json(await req.db.emailAlert.findMany({ where, orderBy: { sent_at: 'desc' } }));
 });
 
-router.post('/', authenticate, (req, res) => {
+router.post('/', authenticate, async (req, res) => {
   const { subject, body, recipient, status } = req.body;
   if (!subject || !body || !recipient) return res.status(422).json({ error: 'subject, body and recipient required' });
   const id = uuid();
-  db.prepare(`INSERT INTO email_alerts VALUES (?,?,?,?,?,?,?,datetime('now'))`)
-    .run(id, subject, body, recipient, req.user.name, req.user.id, status||'sent');
-  res.status(201).json(db.prepare('SELECT * FROM email_alerts WHERE id=?').get(id));
+  const created = await req.db.emailAlert.create({
+    data: { id, subject, body, recipient, sender: req.user.name, sender_id: req.user.id, status: status || 'sent' },
+  });
+  res.status(201).json(created);
 });
 
-router.delete('/:id', authenticate, (req, res) => {
-  db.prepare('DELETE FROM email_alerts WHERE id=?').run(req.params.id);
+router.delete('/:id', authenticate, async (req, res) => {
+  await req.db.emailAlert.deleteMany({ where: { id: req.params.id } });
   res.status(204).end();
 });
 

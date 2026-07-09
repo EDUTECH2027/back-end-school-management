@@ -7,6 +7,7 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
+    "postinstall": "prisma generate --schema=prisma/platform/schema.prisma && prisma generate --schema=prisma/tenant/schema.prisma",
     "seed": "node src/db/seed.js",
     "clean": "node src/db/clean.js",
     "prisma:platform:migrate": "prisma migrate dev --schema=prisma/platform/schema.prisma",
@@ -30,10 +31,10 @@
     "morgan": "^1.10.0",
     "multer": "^2.2.0",
     "pg": "^8.22.0",
+    "prisma": "6.19.3",
     "uuid": "^9.0.1"
   },
   "devDependencies": {
-    "nodemon": "^3.1.0",
-    "prisma": "6.19.3"
+    "nodemon": "^3.1.0"
   }
 }

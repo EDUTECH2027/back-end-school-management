@@ -79,6 +79,7 @@ model PlatformAdmin {
   password_hash String
   role          PlatformRole @default(platform_admin)
   initials      String
+  permissions   Json         @default("[]")
   created_at    DateTime?    @default(now())
   updated_at    DateTime?    @default(now())
 

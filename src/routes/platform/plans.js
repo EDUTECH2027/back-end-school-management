@@ -26,7 +26,7 @@ router.post('/', ...guard, async (req, res) => {
     data: {
       id, name, price, billing_cycle: billing_cycle || 'monthly',
       max_students: max_students ?? null, max_teachers: max_teachers ?? null,
-      features: JSON.stringify(features || []), is_custom: !!is_custom,
+      features: features || [], is_custom: !!is_custom,
     },
   });
 
@@ -48,7 +48,7 @@ router.put('/:id', ...guard, async (req, res) => {
       billing_cycle: billing_cycle ?? current.billing_cycle,
       max_students: max_students !== undefined ? max_students : current.max_students,
       max_teachers: max_teachers !== undefined ? max_teachers : current.max_teachers,
-      features: features ? JSON.stringify(features) : current.features,
+      features: features ?? current.features,
       is_custom: is_custom !== undefined ? !!is_custom : current.is_custom,
       updated_at: new Date(),
     },

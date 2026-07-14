@@ -82,6 +82,11 @@ enum ForumMessageType {
   voice
 }
 
+enum CertificateKind {
+  certificate
+  attestation
+}
+
 // ── Users (auth) ──────────────────────────────────────────────────
 model User {
   id                   String    @id
@@ -260,6 +265,7 @@ model Student {
   report_cards       ReportCard[]
   fee_records        FeeRecord[]
   behavior_logs      StudentBehavior[]
+  certificates       Certificate[]
 
   @@index([class_id])
   @@map("students")
@@ -602,4 +608,31 @@ model SalaryWithdrawal {
 
   @@index([teacher_id])
   @@map("salary_withdrawals")
+}
+
+model Certificate {
+  id               String          @id
+  student_id       String
+  student_name     String?
+  student_number   String?
+  class_name       String?
+  doc_type_id      String
+  theme_id         String
+  kind             CertificateKind @default(certificate)
+  doc_label        String
+  body_html        String          @default("")
+  recipient_name   String
+  issue_date       String
+  cert_number      String
+  signatory_name   String?
+  signatory_title  String?
+  style            Json?
+  created_by       String?
+  created_at       DateTime?       @default(now())
+  updated_at       DateTime?       @default(now())
+
+  student Student @relation(fields: [student_id], references: [id], onDelete: Cascade)
+
+  @@index([student_id])
+  @@map("certificates")
 }

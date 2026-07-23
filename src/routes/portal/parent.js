@@ -1,6 +1,7 @@
 const router = require('express').Router();
 const authenticate = require('../../middleware/auth');
 const authorize = require('../../middleware/authorize');
+const { sortByDay } = require('../../utils/dayOrder');
 
 const guard = [authenticate, authorize('parent')];
 const pid = req => req.user.parent_id;
@@ -65,6 +66,20 @@ router.get('/children/:sid/fees', ...guard, async (req, res) => {
   res.json(fees.map(({ payments, ...rest }) => ({
     ...rest,
     payments: payments.map(p => ({ amount: p.amount, method: p.method, date: p.payment_date })),
+  })));
+});
+
+// GET /api/portal/parent/children/:sid/timetable
+router.get('/children/:sid/timetable', ...guard, async (req, res) => {
+  if (!(await assertChild(req.db, pid(req), req.params.sid, res))) return;
+  const student = await req.db.student.findUnique({ where: { id: req.params.sid }, select: { class_id: true } });
+  if (!student || !student.class_id) return res.json([]);
+  const rows = await req.db.teacherSchedule.findMany({
+    where: { class_id: student.class_id },
+    include: { teacher: { select: { first_name: true, last_name: true } } },
+  });
+  res.json(sortByDay(rows, 'day', 'period_key').map(({ teacher, ...rest }) => ({
+    ...rest, teacher_name: teacher ? `${teacher.first_name} ${teacher.last_name}` : null,
   })));
 });
 

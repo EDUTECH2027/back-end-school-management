@@ -81,7 +81,7 @@ const run = db.transaction(() => {
   db.prepare(`INSERT INTO users VALUES (?,?,?,?,?,?,?,datetime('now'),datetime('now'))`).run(
     uuidv4(),
     'Administrator',
-    'admin@school.com',
+    'admin@edutech.com',
     bcrypt.hashSync('Admin@2025', 10),
     'head_teacher',
     'AD',
@@ -91,4 +91,4 @@ const run = db.transaction(() => {
 
 runWithTenant(SCHOOL_ID, run);
 console.log('✓ Database cleaned. Fresh start — all fake data removed.');
-console.log('  Login: admin@school.com  /  Admin@2025');
+console.log('  Login: admin@edutech.com  /  Admin@2025');

@@ -3,6 +3,7 @@ const { v4: uuid } = require('uuid');
 const authenticate = require('../../middleware/auth');
 const authorize = require('../../middleware/authorize');
 const { sortByDay } = require('../../utils/dayOrder');
+const { getMarksEntryStatus } = require('../../routes/marksSettings');
 
 const guard = [authenticate, authorize('teacher', 'head_teacher', 'super_admin')];
 const tid = req => req.user.teacher_id;
@@ -13,7 +14,7 @@ async function ownsClass(db, classId, teacherId) {
 
 // GET /api/portal/teacher/profile
 router.get('/profile', ...guard, async (req, res) => {
-  const t = await req.db.teacher.findUnique({ where: { id: tid(req) } });
+  const t = await req.db.teacher.findUnique({ where: { id: tid(req) }, include: { documents: true } });
   if (!t) return res.status(404).json({ error: 'Teacher profile not found' });
   res.json(t);
 });
@@ -72,6 +73,8 @@ router.post('/marks', ...guard, async (req, res) => {
   const { classId, termId, marks } = req.body;
   if (!classId || !termId || !Array.isArray(marks)) return res.status(422).json({ error: 'classId, termId, marks[] required' });
   if (!(await ownsClass(req.db, classId, tid(req)))) return res.status(403).json({ error: 'Not your class' });
+  const { is_open } = await getMarksEntryStatus(req.db);
+  if (!is_open) return res.status(403).json({ error: 'Marks filling period is closed' });
 
   await req.db.$transaction(marks.map(m => {
     const total = (m.ca_score || 0) + (m.exam_score || 0);

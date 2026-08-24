@@ -80,6 +80,7 @@ enum ForumMessageType {
   text
   image
   voice
+  video
 }
 
 enum CertificateKind {
@@ -173,9 +174,10 @@ model GradeLevel {
 }
 
 model Subject {
-  id   String @id
-  name String @unique
-  code String @unique
+  id          String @id
+  name        String @unique
+  code        String @unique
+  coefficient Float  @default(1)
 
   marks               Mark[]
   report_card_entries ReportCardEntry[]
@@ -207,8 +209,22 @@ model Teacher {
   payroll           TeacherPayroll[]
   behavior_logs     StudentBehavior[]   @relation("BehaviorTeacher")
   withdrawals       SalaryWithdrawal[]
+  documents         TeacherDocument[]
 
   @@map("teachers")
+}
+
+model TeacherDocument {
+  id         String    @id
+  teacher_id String
+  title      String
+  file_url   String
+  created_at DateTime? @default(now())
+
+  teacher Teacher @relation(fields: [teacher_id], references: [id], onDelete: Cascade)
+
+  @@index([teacher_id])
+  @@map("teacher_documents")
 }
 
 model Class {
@@ -236,25 +252,32 @@ model Class {
 }
 
 model Student {
-  id                    String    @id
-  student_number        String    @unique
-  first_name            String
-  last_name             String
-  date_of_birth         String?
-  gender                Gender?
-  class_id              String?
-  class_name            String?
-  grade_level_name      String?
-  photo_url             String?
-  guardian_name         String?
-  guardian_phone        String?
-  guardian_relationship String?
-  admission_date        String?
-  is_active             Boolean   @default(true)
-  address               String?
-  user_id               String?
-  created_at            DateTime? @default(now())
-  updated_at            DateTime? @default(now())
+  id                      String    @id
+  student_number          String    @unique
+  first_name              String
+  middle_name             String?
+  last_name               String
+  date_of_birth           String?
+  gender                  Gender?
+  class_id                String?
+  class_name              String?
+  grade_level_name        String?
+  photo_url               String?
+  address                 String?
+  city                    String?
+  state                   String?
+  zip_code                String?
+  mobile_number           String?
+  alternate_mobile_number String?
+  sibling_ids             Json      @default("[]")
+  guardian_name           String?
+  guardian_phone          String?
+  guardian_relationship   String?
+  admission_date          String?
+  is_active               Boolean   @default(true)
+  user_id                 String?
+  created_at              DateTime? @default(now())
+  updated_at              DateTime? @default(now())
 
   class              Class?             @relation(fields: [class_id], references: [id], onDelete: SetNull)
   user               User?              @relation("StudentUserRef", fields: [user_id], references: [id], onDelete: SetNull)
@@ -266,9 +289,23 @@ model Student {
   fee_records        FeeRecord[]
   behavior_logs      StudentBehavior[]
   certificates       Certificate[]
+  documents          StudentDocument[]
 
   @@index([class_id])
   @@map("students")
+}
+
+model StudentDocument {
+  id         String    @id
+  student_id String
+  title      String
+  file_url   String
+  created_at DateTime? @default(now())
+
+  student Student @relation(fields: [student_id], references: [id], onDelete: Cascade)
+
+  @@index([student_id])
+  @@map("student_documents")
 }
 
 model Parent {
@@ -382,6 +419,34 @@ model Mark {
   @@map("marks")
 }
 
+// Singleton row (id always 's1') defining the window during which teachers
+// may fill in marks. Unset/disabled = no restriction (marks entry always open).
+model MarksEntryPeriod {
+  id         String    @id
+  is_enabled Boolean   @default(false)
+  opens_at   DateTime?
+  closes_at  DateTime?
+  updated_at DateTime? @default(now())
+
+  @@map("marks_entry_periods")
+}
+
+// Singleton row (id always 's1') holding an admin-uploaded PDF used as the
+// visual layout for generated report cards, plus the field-position map
+// (JSON array) placed on top of it via the template designer.
+model ReportCardTemplate {
+  id          String    @id
+  is_enabled  Boolean   @default(false)
+  file_path   String?
+  file_name   String?
+  page_width  Float?
+  page_height Float?
+  fields      Json?
+  updated_at  DateTime? @default(now())
+
+  @@map("report_card_templates")
+}
+
 model ReportCard {
   id                    String           @id
   student_id            String
@@ -395,6 +460,8 @@ model ReportCard {
   total_marks_obtained  Float            @default(0)
   total_marks_possible  Float            @default(0)
   percentage            Float            @default(0)
+  sequence1_average     Float            @default(0)
+  sequence2_average     Float            @default(0)
   class_position        Int?
   out_of                Int?
   days_present          Int              @default(0)
@@ -422,6 +489,7 @@ model ReportCardEntry {
   ca_score        Float   @default(0)
   exam_score      Float   @default(0)
   total_score     Float   @default(0)
+  coefficient     Float   @default(1)
   grade           String?
   remark          String?
   position        Int?
@@ -558,6 +626,8 @@ model ForumMessage {
   image_url      String?
   voice_url      String?
   voice_duration Int?
+  video_url      String?
+  video_duration Int?
   created_at     DateTime?        @default(now())
 
   thread      ForumThread @relation(fields: [thread_id], references: [id], onDelete: Cascade)

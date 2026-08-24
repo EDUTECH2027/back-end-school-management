@@ -9,7 +9,7 @@
   - `PLATFORM_ADMIN_PASSWORD`
 
 ## Tenant School Admin
-- Email: `admin@school.com`
+- Email: `admin@edutech.com`
 - Password: `Admin@2025`
 - Role: `super_admin` (tenant-level admin)
 - Notes: inserted by `backend/src/db/clean.js` and `backend/src/db/seed.js` as the default school admin account.

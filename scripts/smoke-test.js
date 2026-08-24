@@ -73,7 +73,7 @@ async function main() {
   }
 
   // ── Tenant token ────────────────────────────────────────────────────
-  const tenantToken = await loginAs('admin@school.com', 'Admin@2025');
+  const tenantToken = await loginAs('admin@edutech.com', 'Admin@2025');
   console.log('\n3. Simple tenant CRUD routes (Phase 2)');
   {
     const school = await api('GET', '/api/school', { token: tenantToken });

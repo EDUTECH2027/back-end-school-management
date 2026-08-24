@@ -46,7 +46,9 @@ const parentsRouter      = require('./routes/parents');
 const attendanceRouter   = require('./routes/attendance');
 const timetableRouter    = require('./routes/timetable');
 const marksRouter        = require('./routes/marks');
+const marksSettingsRouter = require('./routes/marksSettings');
 const reportCardsRouter  = require('./routes/reportCards');
+const reportCardTemplateRouter = require('./routes/reportCardTemplate');
 const certificatesRouter = require('./routes/certificates');
 const feesRouter         = require('./routes/fees');
 const payrollRouter      = require('./routes/payroll');
@@ -87,6 +89,7 @@ app.use(cors({
 app.use(morgan('dev'));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
+app.use('/uploads', express.static(require('./utils/forumUploads').UPLOADS_ROOT));
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 app.use('/api/auth',          authRouter);
@@ -100,7 +103,9 @@ app.use('/api/parents',       parentsRouter);
 app.use('/api/attendance',    attendanceRouter);
 app.use('/api/timetable',     timetableRouter);
 app.use('/api/marks',         marksRouter);
+app.use('/api/marks-settings', marksSettingsRouter);
 app.use('/api/report-cards',  reportCardsRouter);
+app.use('/api/report-card-template', reportCardTemplateRouter);
 app.use('/api/certificates',  certificatesRouter);
 app.use('/api/fees',          feesRouter);
 app.use('/api/payroll',       payrollRouter);

@@ -2,6 +2,7 @@ const router = require('express').Router();
 const authenticate = require('../../middleware/auth');
 const authorize = require('../../middleware/authorize');
 const { sortByDay } = require('../../utils/dayOrder');
+const { getAnnualSummary } = require('../../utils/reportCardMath');
 
 const guard = [authenticate, authorize('student')];
 const sid = req => req.user.student_id;
@@ -53,6 +54,17 @@ router.get('/report-cards', ...guard, async (req, res) => {
     ...rest,
     subjects_summary: entries.map(e => `${e.subject_name}:${e.total_score}`).join(','),
   })));
+});
+
+// GET /api/portal/student/annual-average?academicYearId= (defaults to the current academic year)
+router.get('/annual-average', ...guard, async (req, res) => {
+  let { academicYearId } = req.query;
+  if (!academicYearId) {
+    const currentAy = await req.db.academicYear.findFirst({ where: { is_current: true } });
+    academicYearId = currentAy?.id;
+  }
+  if (!academicYearId) return res.json({ terms: { first: null, second: null, third: null }, termsFound: 0, finalAverage: null });
+  res.json(await getAnnualSummary(req.db, { studentId: sid(req), academicYearId }));
 });
 
 // GET /api/portal/student/behavior

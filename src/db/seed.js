@@ -359,7 +359,7 @@ const run = db.transaction(() => {
   const hash = (pw) => bcrypt.hashSync(pw, 10);
   // 11 columns: id, name, email, password_hash, role, initials, teacher_id, student_id, parent_id, created_at, updated_at
   const insUser = db.prepare(`INSERT INTO users VALUES (?,?,?,?,?,?,?,?,?,datetime('now'),datetime('now'))`);
-  insUser.run(uuidv4(),'Administrator','admin@school.com',hash('Admin@2025'),'super_admin','AD',null,null,null);
+  insUser.run(uuidv4(),'Administrator','admin@edutech.com',hash('Admin@2025'),'super_admin','AD',null,null,null);
 });
 
 runWithTenant(SCHOOL_ID, run);

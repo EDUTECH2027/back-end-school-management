@@ -2,6 +2,7 @@ const router = require('express').Router();
 const authenticate = require('../../middleware/auth');
 const authorize = require('../../middleware/authorize');
 const { sortByDay } = require('../../utils/dayOrder');
+const { getAnnualSummary } = require('../../utils/reportCardMath');
 
 const guard = [authenticate, authorize('parent')];
 const pid = req => req.user.parent_id;
@@ -81,6 +82,18 @@ router.get('/children/:sid/timetable', ...guard, async (req, res) => {
   res.json(sortByDay(rows, 'day', 'period_key').map(({ teacher, ...rest }) => ({
     ...rest, teacher_name: teacher ? `${teacher.first_name} ${teacher.last_name}` : null,
   })));
+});
+
+// GET /api/portal/parent/children/:sid/annual-average?academicYearId= (defaults to the current academic year)
+router.get('/children/:sid/annual-average', ...guard, async (req, res) => {
+  if (!(await assertChild(req.db, pid(req), req.params.sid, res))) return;
+  let { academicYearId } = req.query;
+  if (!academicYearId) {
+    const currentAy = await req.db.academicYear.findFirst({ where: { is_current: true } });
+    academicYearId = currentAy?.id;
+  }
+  if (!academicYearId) return res.json({ terms: { first: null, second: null, third: null }, termsFound: 0, finalAverage: null });
+  res.json(await getAnnualSummary(req.db, { studentId: req.params.sid, academicYearId }));
 });
 
 // GET /api/portal/parent/children/:sid/report-cards

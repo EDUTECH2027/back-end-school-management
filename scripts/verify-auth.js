@@ -16,13 +16,13 @@ const BASE = `http://localhost:${PORT}`;
 
 // Known-good credentials confirmed against the migrated data before this script
 // was written: platform bootstrap owner, and a real pre-migration tenant user
-// (admin@school.com / Admin@2025 — from src/db/seed.js's seed insert, NOT a
+// (admin@edutech.com / Admin@2025 — from src/db/seed.js's seed insert, NOT a
 // freshly created post-migration account, so this actually proves the migrated
 // password_hash still verifies through the new bcrypt.compareSync call path).
 const PLATFORM_EMAIL = 'superadmin@platform.local';
 const PLATFORM_PASSWORD = 'SuperAdmin@2025';
 const TENANT_SCHOOL_ID = '250b289e-2056-46ef-ac38-ad823dc6f1d3';
-const TENANT_ADMIN_EMAIL = 'admin@school.com';
+const TENANT_ADMIN_EMAIL = 'admin@edutech.com';
 const TENANT_ADMIN_PASSWORD = 'Admin@2025';
 
 let failures = 0;

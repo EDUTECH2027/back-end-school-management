@@ -59,7 +59,7 @@ router.post('/portal-accounts', authenticate, authorize('super_admin', 'head_tea
       }
       const userId = uuid();
       const initials = `${s.first_name[0]}${s.last_name[0]}`.toUpperCase();
-      await tx.user.create({ data: { id: userId, name: `${s.first_name} ${s.last_name}`, email, password_hash: hash, role: 'student', initials, student_id: s.id } });
+      await tx.user.create({ data: { id: userId, name: `${s.first_name} ${s.last_name}`, email, password_hash: hash, role: 'student', initials, student_id: s.id, must_change_password: true } });
       await tx.student.update({ where: { id: s.id }, data: { user_id: userId, updated_at: new Date() } });
       directorySyncs.push({ email, role: 'student' });
       result.students.created++;

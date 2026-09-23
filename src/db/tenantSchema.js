@@ -1,3 +1,8 @@
+/*
+ * Copyright (c) 2026 [COMPANY LEGAL NAME]. All rights reserved.
+ * Proprietary and confidential. Unauthorized copying, distribution or
+ * modification of this file, via any medium, is strictly prohibited.
+ */
 // Pure helpers for mapping a school id to its Postgres schema name / connection URL.
 // Postgres identifiers: max 63 bytes, must not start with a digit, safest as [a-z0-9_].
 // UUIDs are 36 chars with hyphens; stripping hyphens + a 'tenant_' prefix keeps this

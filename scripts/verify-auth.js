@@ -1,3 +1,8 @@
+/*
+ * Copyright (c) 2026 [COMPANY LEGAL NAME]. All rights reserved.
+ * Proprietary and confidential. Unauthorized copying, distribution or
+ * modification of this file, via any medium, is strictly prohibited.
+ */
 // Isolated auth-flow regression check for the Postgres/Prisma port (Phase 0 of
 // the migration plan). Mounts ONLY the ported auth router + a tiny protected
 // probe route on a throwaway Express app — the rest of the route files aren't
@@ -68,20 +73,34 @@ async function main() {
       tenantToken = body.token;
     }
 
-    console.log('\n3. Wrong password rejected');
+    console.log('\n3. Student matricule login without a password');
+    {
+      const { status, body } = await login('BSPS-2025-001', '');
+      check('matricule status 200', status === 200, `got ${status}: ${JSON.stringify(body)}`);
+      check('matricule scope=tenant', body.user?.scope === 'tenant');
+      check('matricule role=student', body.user?.role === 'student');
+      check('matricule student_id populated', !!body.user?.student_id);
+    }
+
+    {
+      const { status } = await login(TENANT_ADMIN_EMAIL, '');
+      check('email without password -> 422', status === 422);
+    }
+
+    console.log('\n4. Wrong password rejected');
     {
       const { status } = await login(TENANT_ADMIN_EMAIL, 'not-the-password');
       check('status 401', status === 401);
     }
 
-    console.log('\n4. Nonexistent email rejected without leaking which case it was');
+    console.log('\n5. Nonexistent email rejected without leaking which case it was');
     {
       const { status, body } = await login('nobody-at-all@nowhere.test', 'whatever');
       check('status 401', status === 401);
       check('generic error message', body.error === 'Invalid email or password');
     }
 
-    console.log('\n5. Protected probe route resolves req.user + req.db from the token');
+    console.log('\n6. Protected probe route resolves req.user + req.db from the token');
     {
       const res = await fetch(`${BASE}/api/_probe`, { headers: { Authorization: `Bearer ${tenantToken}` } });
       const body = await res.json();
@@ -90,7 +109,7 @@ async function main() {
       check('req.db attached', body.hasDb === true);
     }
 
-    console.log('\n6. Suspending the school locks out the existing token; reactivating restores it');
+    console.log('\n7. Suspending the school locks out the existing token; reactivating restores it');
     {
       await platformClient.school.update({ where: { id: TENANT_SCHOOL_ID }, data: { status: 'suspended' } });
       const res1 = await fetch(`${BASE}/api/_probe`, { headers: { Authorization: `Bearer ${tenantToken}` } });
@@ -101,7 +120,7 @@ async function main() {
       check('reactivated -> 200', res2.status === 200, `got ${res2.status}`);
     }
 
-    console.log('\n7. Password change flow (round-trips back to the original password when done)');
+    console.log('\n8. Password change flow (round-trips back to the original password when done)');
     {
       const wrongRes = await fetch(`${BASE}/api/auth/me/password`, {
         method: 'PUT',
@@ -134,7 +153,7 @@ async function main() {
       check('password restored to original', restoreRes.status === 200);
     }
 
-    console.log('\n8. Role-payload spot check for the other roles (teacher/student/parent), using a scoped test-password reset on synthetic seed accounts');
+    console.log('\n9. Role-payload spot check for the other roles (teacher/student/parent), using a scoped test-password reset on synthetic seed accounts');
     {
       const tenantDb = tenantPool.getOrOpen(TENANT_SCHOOL_ID);
       const probes = [

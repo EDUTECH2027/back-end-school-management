@@ -1,3 +1,8 @@
+/*
+ * Copyright (c) 2026 [COMPANY LEGAL NAME]. All rights reserved.
+ * Proprietary and confidential. Unauthorized copying, distribution or
+ * modification of this file, via any medium, is strictly prohibited.
+ */
 // Single source of truth for the coefficient-weighted average formulas, shared
 // by the report-card generation route and every portal "annual average" read.
 //

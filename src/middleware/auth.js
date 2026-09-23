@@ -1,23 +1,23 @@
-const jwt = require('jsonwebtoken');
+/*
+ * Copyright (c) 2026 [COMPANY LEGAL NAME]. All rights reserved.
+ * Proprietary and confidential. Unauthorized copying, distribution or
+ * modification of this file, via any medium, is strictly prohibited.
+ */
 const platformClient = require('../db/platformClient');
 const tenantPool = require('../db/tenantPool');
+const { verifyAccess } = require('../auth/verify');
 
 module.exports = async function authenticate(req, res, next) {
   const header = req.headers['authorization'];
   if (!header || !header.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Missing or invalid Authorization header' });
   }
-  const token = header.slice(7);
+
   let payload;
   try {
-    payload = jwt.verify(token, process.env.JWT_SECRET || 'dev_secret');
-  } catch {
-    return res.status(401).json({ error: 'Token expired or invalid' });
-  }
-
-  // Platform-scoped tokens never authenticate against tenant-scoped routes.
-  if (payload.scope === 'platform') {
-    return res.status(403).json({ error: 'Forbidden' });
+    payload = await verifyAccess(header.slice(7), 'tenant');
+  } catch (e) {
+    return res.status(e.status || 401).json({ error: e.message, ...(e.code ? { code: e.code } : {}) });
   }
 
   const school = await platformClient.school.findUnique({

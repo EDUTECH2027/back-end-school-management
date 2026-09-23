@@ -29,6 +29,11 @@ enum AttendanceStatus {
   excused
 }
 
+enum AttendanceSource {
+  manual
+  qr_scan
+}
+
 enum TermName {
   first
   second
@@ -100,6 +105,21 @@ model User {
   student_id           String?
   parent_id            String?
   must_change_password Boolean   @default(false)
+
+  // Session kill-switch — see AuthRefreshToken / auth hardening.
+  token_version Int @default(0)
+
+  // Login throttling / lockout
+  failed_login_count   Int       @default(0)
+  locked_until         DateTime?
+  last_failed_login_at DateTime?
+
+  // Two-factor (TOTP). Secret is AES-256-GCM ciphertext, never plaintext.
+  totp_secret      String?
+  totp_enabled     Boolean   @default(false)
+  totp_enrolled_at DateTime?
+  recovery_codes   Json? // [{ hash, used_at }]
+
   created_at           DateTime? @default(now())
   updated_at           DateTime? @default(now())
 
@@ -122,16 +142,17 @@ model User {
 
 // ── School (singleton profile row) ───────────────────────────────
 model School {
-  id           String    @id
-  name         String
-  code         String?
-  address      String?
-  phone        String?
-  email        String?
-  head_teacher String?
-  motto        String?
-  logo_url     String?
-  updated_at   DateTime? @default(now())
+  id                String    @id
+  name              String
+  code              String?
+  address           String?
+  phone             String?
+  email             String?
+  head_teacher      String?
+  motto             String?
+  logo_url          String?
+  require_admin_2fa Boolean   @default(false)
+  updated_at        DateTime? @default(now())
 
   @@map("school")
 }
@@ -366,10 +387,41 @@ model TeacherAttendance {
   status     AttendanceStatus
   remarks    String?
 
+  // Populated by a QR-code scan; null for manually-marked or self-reported rows.
+  scan_time  DateTime?
+  qr_code_id String? // AttendanceQrCode.id used for this scan — audit trail only, not a relation
+  source     AttendanceSource @default(manual)
+
   teacher Teacher @relation(fields: [teacher_id], references: [id], onDelete: Cascade)
 
   @@unique([teacher_id, date], name: "teacher_attendance_teacher_date")
   @@map("teacher_attendance")
+}
+
+/// One row per calendar month, per school. The token is stored in plaintext —
+/// it is meant to be printed and posted publicly, so the threat model is
+/// "unguessable and not reusable across months/schools", not "secret from the
+/// admin who generated it". Storing it in the clear lets Settings redisplay /
+/// reprint the current poster on demand without invalidating it.
+model AttendanceQrCode {
+  id         String    @id
+  month      String    @unique // "2026-09"
+  token      String    @unique
+  created_by String?
+  created_at DateTime  @default(now())
+  expires_at DateTime
+  revoked_at DateTime?
+
+  @@map("attendance_qr_codes")
+}
+
+/// Singleton (id "s1") — the configurable on-time/late cutoff for QR scans.
+model AttendanceSettings {
+  id                String   @id
+  arrival_threshold String   @default("07:30") // "HH:MM", 24h, compared to scan-time
+  updated_at        DateTime @default(now())
+
+  @@map("attendance_settings")
 }
 
 model TeacherSchedule {

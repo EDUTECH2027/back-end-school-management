@@ -1,3 +1,8 @@
+/*
+ * Copyright (c) 2026 [COMPANY LEGAL NAME]. All rights reserved.
+ * Proprietary and confidential. Unauthorized copying, distribution or
+ * modification of this file, via any medium, is strictly prohibited.
+ */
 /**
  * One-off migration: registers the pre-existing single-tenant
  * backend/data/school.db as the first tenant ("School #1") in the new

@@ -80,10 +80,49 @@ model PlatformAdmin {
   role          PlatformRole @default(platform_admin)
   initials      String
   permissions   Json         @default("[]")
+
+  // Session kill-switch: bumped on password change / forced logout so any
+  // access token minted before the bump is rejected on its next use.
+  token_version Int @default(0)
+
+  // Login throttling / lockout
+  failed_login_count   Int       @default(0)
+  locked_until         DateTime?
+  last_failed_login_at DateTime?
+
+  // Two-factor (TOTP). Secret is AES-256-GCM ciphertext, never plaintext.
+  totp_secret      String?
+  totp_enabled     Boolean   @default(false)
+  totp_enrolled_at DateTime?
+  recovery_codes   Json? // [{ hash, used_at }]
+
   created_at    DateTime?    @default(now())
   updated_at    DateTime?    @default(now())
 
   @@map("platform_admins")
+}
+
+/// One row per issued refresh token, for both platform and tenant subjects.
+/// Central (platform DB) so it survives tenant connection-pool eviction and
+/// covers every scope with one revocation path.
+model AuthRefreshToken {
+  id             String    @id
+  subject_type   String // 'platform' | 'tenant'
+  subject_id     String
+  school_id      String?
+  family_id      String // rotation lineage; reuse of a revoked token kills the family
+  token_hash     String    @unique // sha-256 of the raw token
+  user_agent     String?
+  ip             String?
+  expires_at     DateTime
+  revoked_at     DateTime?
+  replaced_by_id String?
+  created_at     DateTime  @default(now())
+  last_used_at   DateTime?
+
+  @@index([subject_type, subject_id])
+  @@index([family_id])
+  @@map("auth_refresh_tokens")
 }
 
 model UserDirectory {
@@ -144,4 +183,26 @@ model Feature {
   description String?
 
   @@map("features")
+}
+
+/// On-prem / desktop licenses issued by the platform owner. The signed .lic file
+/// handed to the customer is the source of truth offline; this table lets the
+/// owner list / revoke and receive check-ins.
+model IssuedLicense {
+  id           String    @id
+  school_name  String
+  edition      String    @default("on_prem")
+  seats        Int?
+  max_students Int?
+  hardware_id  String?
+  instance_id  String?
+  issued_at    DateTime  @default(now())
+  expires_at   DateTime?
+  revoked_at   DateTime?
+  last_seen_at DateTime?
+  last_seen_ip String?
+  notes        String?
+
+  @@index([revoked_at])
+  @@map("issued_licenses")
 }

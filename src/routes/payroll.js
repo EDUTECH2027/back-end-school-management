@@ -1,14 +1,26 @@
+/*
+ * Copyright (c) 2026 [COMPANY LEGAL NAME]. All rights reserved.
+ * Proprietary and confidential. Unauthorized copying, distribution or
+ * modification of this file, via any medium, is strictly prohibited.
+ */
 const router = require('express').Router();
 const authenticate = require('../middleware/auth');
 const { v4: uuid } = require('uuid');
 const { calcNet } = require('../utils/payroll');
+const { getMonthlyAttendance } = require('../utils/attendanceSummary');
 
-const withTeacher = (r) => {
+const withTeacher = async (db, r) => {
   if (!r) return null;
   const { teacher, ...rest } = r;
   let subjects = [];
   if (teacher) { try { subjects = JSON.parse(teacher.subjects || '[]'); } catch { subjects = []; } }
-  return { ...rest, teacher: teacher ? { first_name: teacher.first_name, last_name: teacher.last_name, subjects } : null, net_pay: calcNet(r) };
+  return {
+    ...rest,
+    teacher: teacher ? { first_name: teacher.first_name, last_name: teacher.last_name, subjects } : null,
+    net_pay: calcNet(r),
+    // Live, not stored — the centralized attendance system stays the one source of truth.
+    attendance_detail: await getMonthlyAttendance(db, r.teacher_id, r.month),
+  };
 };
 const TEACHER_INCLUDE = { teacher: { select: { first_name: true, last_name: true, subjects: true } } };
 
@@ -20,7 +32,7 @@ router.get('/', authenticate, async (req, res) => {
   if (teacherId) where.teacher_id = teacherId;
   if (status) where.status = status;
   const rows = await req.db.teacherPayroll.findMany({ where, include: TEACHER_INCLUDE, orderBy: [{ month: 'desc' }, { teacher_id: 'asc' }] });
-  res.json(rows.map(withTeacher));
+  res.json(await Promise.all(rows.map(r => withTeacher(req.db, r))));
 });
 
 // GET /api/payroll/summary?month=2024-01
@@ -50,7 +62,7 @@ router.get('/summary', authenticate, async (req, res) => {
 router.get('/:id', authenticate, async (req, res) => {
   const row = await req.db.teacherPayroll.findUnique({ where: { id: req.params.id }, include: TEACHER_INCLUDE });
   if (!row) return res.status(404).json({ error: 'Payroll record not found' });
-  res.json(withTeacher(row));
+  res.json(await withTeacher(req.db, row));
 });
 
 // POST /api/payroll  — create payroll entry for a teacher/month
@@ -82,7 +94,7 @@ router.post('/', authenticate, async (req, res) => {
     include: TEACHER_INCLUDE,
   });
 
-  res.status(201).json(withTeacher(created));
+  res.status(201).json(await withTeacher(req.db, created));
 });
 
 // POST /api/payroll/bulk  — generate draft payroll for all active teachers for a month
@@ -98,12 +110,19 @@ router.post('/bulk', authenticate, async (req, res) => {
 
   const toCreate = teachers.filter(t => !existingIds.has(t.id));
   if (toCreate.length > 0) {
-    await req.db.$transaction(toCreate.map(t => req.db.teacherPayroll.create({
+    // Prefill absences/late_coming from the centralized attendance system —
+    // one-time seed only: existing rows (skipped above) are never touched again,
+    // so a later manual correction here is never silently overwritten.
+    const attendanceByTeacher = await Promise.all(
+      toCreate.map(t => getMonthlyAttendance(req.db, t.id, month))
+    );
+    await req.db.$transaction(toCreate.map((t, i) => req.db.teacherPayroll.create({
       data: {
         id: uuid(), teacher_id: t.id, month,
         hourly_rate: hourlyRate ?? 3500, contracted_hours: contractedHours ?? 80, base_allowance: baseAllowance ?? 50000,
         absence_deduction: absenceDeduction ?? 12000, late_deduction: lateDeduction ?? 2500,
-        hours_worked: 0, absences: 0, late_coming: 0, bonus: 0, notes: '', status: 'draft',
+        hours_worked: 0, absences: attendanceByTeacher[i].absences, late_coming: attendanceByTeacher[i].daysLate,
+        bonus: 0, notes: '', status: 'draft',
       },
     })));
   }
@@ -133,7 +152,7 @@ router.put('/:id', authenticate, async (req, res) => {
     include: TEACHER_INCLUDE,
   });
 
-  res.json(withTeacher(updated));
+  res.json(await withTeacher(req.db, updated));
 });
 
 // PATCH /api/payroll/:id/status
@@ -145,7 +164,7 @@ router.patch('/:id/status', authenticate, async (req, res) => {
   const row = await req.db.teacherPayroll.findUnique({ where: { id: req.params.id } });
   if (!row) return res.status(404).json({ error: 'Payroll record not found' });
   const updated = await req.db.teacherPayroll.update({ where: { id: req.params.id }, data: { status, updated_at: new Date() }, include: TEACHER_INCLUDE });
-  res.json(withTeacher(updated));
+  res.json(await withTeacher(req.db, updated));
 });
 
 // DELETE /api/payroll/:id

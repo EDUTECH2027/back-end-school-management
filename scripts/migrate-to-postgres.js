@@ -1,3 +1,8 @@
+/*
+ * Copyright (c) 2026 [COMPANY LEGAL NAME]. All rights reserved.
+ * Proprietary and confidential. Unauthorized copying, distribution or
+ * modification of this file, via any medium, is strictly prohibited.
+ */
 // One-off ETL: reads the existing node:sqlite data (platform.db + per-tenant
 // files) and writes it into the new Postgres schemas via a raw `pg` client.
 // Read-only against SQLite; safe to re-run against a freshly wiped Postgres

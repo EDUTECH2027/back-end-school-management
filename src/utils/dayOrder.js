@@ -1,3 +1,8 @@
+/*
+ * Copyright (c) 2026 [COMPANY LEGAL NAME]. All rights reserved.
+ * Proprietary and confidential. Unauthorized copying, distribution or
+ * modification of this file, via any medium, is strictly prohibited.
+ */
 // Replaces the `CASE WHEN day='monday' THEN 1...` SQL ordering idiom that was
 // duplicated across timetable.js, portal/student.js, and portal/teacher.js.
 const DAY_ORDER = { monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5 };

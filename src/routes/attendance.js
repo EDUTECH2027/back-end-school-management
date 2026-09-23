@@ -1,3 +1,8 @@
+/*
+ * Copyright (c) 2026 [COMPANY LEGAL NAME]. All rights reserved.
+ * Proprietary and confidential. Unauthorized copying, distribution or
+ * modification of this file, via any medium, is strictly prohibited.
+ */
 const router = require('express').Router();
 const authenticate = require('../middleware/auth');
 const { v4: uuid } = require('uuid');
@@ -71,17 +76,48 @@ router.put('/:id', authenticate, async (req, res) => {
 
 // ── Teacher Attendance ──────────────────────────────────────────────
 
-// GET /api/attendance/teachers?teacherId=tc1&month=2025-06
+// GET /api/attendance/teachers?teacherId=tc1&month=2025-06&status=late&source=qr_scan
 router.get('/teachers', authenticate, async (req, res) => {
-  const { teacherId, month, date } = req.query;
+  const { teacherId, month, date, status, source } = req.query;
   const where = {};
   if (teacherId) where.teacher_id = teacherId;
   if (date) where.date = date;
   if (month) where.date = { startsWith: month };
+  if (status) where.status = status;
+  if (source) where.source = source;
   const rows = await req.db.teacherAttendance.findMany({
     where, include: { teacher: { select: { first_name: true, last_name: true } } }, orderBy: { date: 'desc' },
   });
   res.json(rows.map(({ teacher, ...rest }) => ({ ...rest, first_name: teacher?.first_name ?? null, last_name: teacher?.last_name ?? null })));
+});
+
+// GET /api/attendance/teachers/summary?month=2025-06 — totals for the reporting view.
+router.get('/teachers/summary', authenticate, async (req, res) => {
+  const { month } = req.query;
+  if (!month) return res.status(422).json({ error: 'month required' });
+
+  const rows = await req.db.teacherAttendance.findMany({
+    where: { date: { startsWith: month } },
+    include: { teacher: { select: { first_name: true, last_name: true } } },
+  });
+
+  const byTeacher = new Map();
+  const totals = { on_time: 0, late: 0, absent: 0, excused: 0, total: 0 };
+  for (const r of rows) {
+    if (!byTeacher.has(r.teacher_id)) {
+      byTeacher.set(r.teacher_id, {
+        teacher_id: r.teacher_id,
+        teacher_name: r.teacher ? `${r.teacher.first_name} ${r.teacher.last_name}` : null,
+        on_time: 0, late: 0, absent: 0, excused: 0, total: 0,
+      });
+    }
+    const s = byTeacher.get(r.teacher_id);
+    const key = r.status === 'present' ? 'on_time' : r.status;
+    if (key in s) { s[key]++; totals[key]++; }
+    s.total++; totals.total++;
+  }
+
+  res.json({ month, totals, byTeacher: [...byTeacher.values()] });
 });
 
 // POST /api/attendance/teachers

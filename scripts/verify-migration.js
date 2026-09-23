@@ -1,3 +1,8 @@
+/*
+ * Copyright (c) 2026 [COMPANY LEGAL NAME]. All rights reserved.
+ * Proprietary and confidential. Unauthorized copying, distribution or
+ * modification of this file, via any medium, is strictly prohibited.
+ */
 // Verifies the SQLite -> Postgres migration: row-count parity per table, a
 // field-by-field spot-check on sampled rows, and a byte-identity check on every
 // password_hash (the single most important check — bcrypt hashes must survive

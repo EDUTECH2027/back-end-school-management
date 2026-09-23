@@ -1,3 +1,8 @@
+/*
+ * Copyright (c) 2026 [COMPANY LEGAL NAME]. All rights reserved.
+ * Proprietary and confidential. Unauthorized copying, distribution or
+ * modification of this file, via any medium, is strictly prohibited.
+ */
 // Broad regression smoke test against the LIVE running server (backend/src/index.js
 // must already be up on PORT, default 3001). Exercises representative endpoints
 // across every porting phase with real auth tokens. Not exhaustive coverage of

@@ -1,3 +1,8 @@
+/*
+ * Copyright (c) 2026 [COMPANY LEGAL NAME]. All rights reserved.
+ * Proprietary and confidential. Unauthorized copying, distribution or
+ * modification of this file, via any medium, is strictly prohibited.
+ */
 // Applies the tenant Prisma migrations to a school's Postgres schema, creating
 // the schema on first connect if it doesn't exist yet (confirmed via spike:
 // `prisma migrate deploy` auto-creates the schema named in its datasource URL).

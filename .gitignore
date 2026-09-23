@@ -5,3 +5,9 @@ uploads/
 *.db
 *.db-shm
 *.db-wal
+
+# Licensing — never commit signing keys or issued license files
+license-keys/
+*.pem
+*.lic
+license-state.json

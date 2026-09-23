@@ -1,3 +1,8 @@
+/*
+ * Copyright (c) 2026 [COMPANY LEGAL NAME]. All rights reserved.
+ * Proprietary and confidential. Unauthorized copying, distribution or
+ * modification of this file, via any medium, is strictly prohibited.
+ */
 // Singleton PrismaClient for the `platform` schema — replaces db/platform.js.
 // One connection for the process lifetime, same as the old singleton DatabaseSync.
 const { PrismaClient } = require('../../node_modules/.prisma/platform-client');

@@ -1,3 +1,8 @@
+/*
+ * Copyright (c) 2026 [COMPANY LEGAL NAME]. All rights reserved.
+ * Proprietary and confidential. Unauthorized copying, distribution or
+ * modification of this file, via any medium, is strictly prohibited.
+ */
 const router = require('express').Router();
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
@@ -176,6 +181,10 @@ router.patch('/:id/deactivate', ...guard, async (req, res) => {
     where: { id: req.params.id },
     data: { status: 'inactive', updated_at: new Date() },
   });
+  // Force every user of this school out immediately (their access tokens are
+  // also rejected by middleware/auth.js on the school-status check, but this
+  // kills refresh tokens so they can't bounce back after re-activation).
+  await require('../../auth/tokens').revokeAllForSchool(req.params.id).catch(() => {});
   await logAction(req, 'school.deactivated', 'school', req.params.id, {});
   res.json(updated);
 });

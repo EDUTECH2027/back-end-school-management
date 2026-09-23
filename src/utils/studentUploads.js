@@ -1,3 +1,8 @@
+/*
+ * Copyright (c) 2026 [COMPANY LEGAL NAME]. All rights reserved.
+ * Proprietary and confidential. Unauthorized copying, distribution or
+ * modification of this file, via any medium, is strictly prohibited.
+ */
 // Multer config for student profile photos + documents — same per-tenant
 // disk-storage pattern as backend/src/utils/forumUploads.js, kept as its own
 // file rather than sharing one generic uploader, since the accepted file

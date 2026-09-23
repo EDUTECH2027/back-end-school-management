@@ -1,7 +1,16 @@
+/*
+ * Copyright (c) 2026 [COMPANY LEGAL NAME]. All rights reserved.
+ * Proprietary and confidential. Unauthorized copying, distribution or
+ * modification of this file, via any medium, is strictly prohibited.
+ */
 const router = require('express').Router();
 const authenticate = require('../middleware/auth');
+const bcrypt = require('bcryptjs');
 const { v4: uuid } = require('uuid');
+const platformClient = require('../db/platformClient');
 const { upload } = require('../utils/teacherUploads');
+
+const DEFAULT_TEACHER_PASSWORD = 'Welcome@2025';
 
 const parse = row => row ? { ...row, isActive: !!row.is_active } : null;
 
@@ -44,6 +53,10 @@ router.post('/', authenticate, upload.fields([{ name: 'documents', maxCount: 10 
 
   const id = uuid();
   const documentFiles = req.files?.documents || [];
+  const existingUser = await req.db.user.findFirst({ where: { email: { equals: email, mode: 'insensitive' } } });
+  if (existingUser) return res.status(409).json({ error: 'A login already exists for this email' });
+  const directoryHit = await platformClient.userDirectory.findFirst({ where: { email: { equals: email, mode: 'insensitive' } } });
+  if (directoryHit) return res.status(409).json({ error: 'A login already exists for this email' });
 
   await req.db.$transaction(async (tx) => {
     await tx.teacher.create({
@@ -54,6 +67,17 @@ router.post('/', authenticate, upload.fields([{ name: 'documents', maxCount: 10 
       },
     });
 
+    const userId = uuid();
+    const fullName = `${firstName} ${lastName}`;
+    const initials = fullName.split(' ').map(word => word[0]).join('').toUpperCase().slice(0, 3);
+    await tx.user.create({
+      data: {
+        id: userId, name: fullName, email, password_hash: bcrypt.hashSync(DEFAULT_TEACHER_PASSWORD, 10),
+        role: 'teacher', initials, teacher_id: id,
+      },
+    });
+    await tx.teacher.update({ where: { id }, data: { user_id: userId } });
+
     for (let i = 0; i < documentFiles.length; i++) {
       const file = documentFiles[i];
       const url = `/uploads/${req.user.school_id}/teachers/${file.filename}`;
@@ -61,6 +85,12 @@ router.post('/', authenticate, upload.fields([{ name: 'documents', maxCount: 10 
       await tx.teacherDocument.create({ data: { id: uuid(), teacher_id: id, title, file_url: url } });
     }
   });
+
+  try {
+    await platformClient.userDirectory.create({ data: { email, school_id: req.user.school_id, role: 'teacher' } });
+  } catch (err) {
+    console.error(`[teachers] user_directory sync failed for ${email}:`, err.message);
+  }
 
   const withDocs = await req.db.teacher.findUnique({ where: { id }, include: { documents: true } });
   res.status(201).json(parse(withDocs));

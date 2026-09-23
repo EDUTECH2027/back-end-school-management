@@ -1,3 +1,8 @@
+/*
+ * Copyright (c) 2026 [COMPANY LEGAL NAME]. All rights reserved.
+ * Proprietary and confidential. Unauthorized copying, distribution or
+ * modification of this file, via any medium, is strictly prohibited.
+ */
 // Redesigned for Postgres: the original zipped raw SQLite .db files, which has
 // no Postgres analog. pg_dump/pg_restore (the natural replacement) aren't
 // guaranteed to be installed wherever this backend runs (confirmed absent on

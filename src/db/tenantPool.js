@@ -1,3 +1,8 @@
+/*
+ * Copyright (c) 2026 [COMPANY LEGAL NAME]. All rights reserved.
+ * Proprietary and confidential. Unauthorized copying, distribution or
+ * modification of this file, via any medium, is strictly prohibited.
+ */
 // LRU pool of PrismaClient instances, one per tenant schema — replaces the
 // connection-pool half of tenantContext.js. No AsyncLocalStorage: callers resolve
 // a client explicitly (middleware/auth.js sets req.db) rather than relying on

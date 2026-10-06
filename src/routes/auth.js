@@ -228,6 +228,39 @@ router.post('/refresh', /* authLimiter, */ async (req, res) => { // SECURITY DIS
   }
 });
 
+// ── POST /api/auth/activate ─────────────────────────────────────────────────
+// First-time account activation from the link sent over WhatsApp. Single use:
+// the token is bound to the password hash that existed when it was issued.
+router.post('/activate',
+  authLimiter,
+  body('token').isString().notEmpty(),
+  body('newPassword').isLength({ min: 8 }),
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(422).json({ error: 'Password must be at least 8 characters.' });
+
+    const { verifyActivationToken, fingerprint } = require('../auth/activation');
+    let claims;
+    try { claims = verifyActivationToken(req.body.token); }
+    catch (e) { return res.status(e.status || 400).json({ error: e.message }); }
+
+    const school = await platformClient.school.findUnique({ where: { id: claims.schoolId }, select: { id: true, status: true } });
+    const used = { error: 'This activation link has already been used or is no longer valid. Sign in, or ask your administrator to resend it.' };
+    if (!school || school.status !== 'active') return res.status(400).json(used);
+
+    const db = tenantPool.getOrOpen(claims.schoolId);
+    const user = await db.user.findUnique({ where: { id: claims.userId } });
+    if (!user || fingerprint(user.password_hash) !== claims.fp) return res.status(400).json(used);
+
+    await db.user.update({
+      where: { id: user.id },
+      data: { password_hash: bcrypt.hashSync(req.body.newPassword, 10), must_change_password: false, updated_at: new Date() },
+    });
+    await killAllSessions({ subjectType: 'tenant', subjectId: user.id, schoolId: claims.schoolId, model: db.user });
+    res.json({ message: 'Account activated. You can now sign in.', email: user.email });
+  }
+);
+
 // ── POST /api/auth/logout ───────────────────────────────────────────────────
 router.post('/logout', async (req, res) => {
   const raw = req.body?.refreshToken || readRefreshCookie(req);

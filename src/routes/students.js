@@ -4,6 +4,8 @@
  * modification of this file, via any medium, is strictly prohibited.
  */
 const router = require('express').Router();
+const { schemaNameFor } = require('../db/tenantSchema');
+const { resolveClasses, classKey } = require('../utils/classMatching');
 const authenticate = require('../middleware/auth');
 const bcrypt = require('bcryptjs');
 const { v4: uuid } = require('uuid');
@@ -32,23 +34,31 @@ async function logDirectorySyncFailure(req, action, email, err) {
 
 // GET /api/students
 router.get('/', authenticate, async (req, res) => {
-  const { search, classId, isActive, page = 1, limit = 100 } = req.query;
+  const { search, classId, isActive, paged, page = 1, limit = 100 } = req.query;
   const where = {};
   if (search) {
     where.OR = [
       { first_name: { contains: search, mode: 'insensitive' } },
       { last_name: { contains: search, mode: 'insensitive' } },
       { student_number: { contains: search, mode: 'insensitive' } },
+      { class_name: { contains: search, mode: 'insensitive' } },
     ];
   }
   if (classId) where.class_id = classId;
   if (isActive !== undefined) where.is_active = isActive === 'true';
-  const rows = await req.db.student.findMany({
-    where, orderBy: { first_name: 'asc' },
-    take: Number(limit), skip: (Number(page) - 1) * Number(limit),
+  const take = Math.min(Math.max(Number(limit) || 100, 1), 500);
+  const pageNo = Math.max(Number(page) || 1, 1);
+  const query = {
+    where, orderBy: [{ first_name: 'asc' }, { id: 'asc' }], // id keeps page boundaries stable for equal names
+    take, skip: (pageNo - 1) * take,
     include: { documents: true },
-  });
-  res.json(rows.map(parse));
+  };
+  // ?paged=true returns { data, total, page, limit } so a UI can show page controls over ALL matches.
+  if (paged === 'true') {
+    const [rows, total] = await Promise.all([req.db.student.findMany(query), req.db.student.count({ where })]);
+    return res.json({ data: rows.map(parse), total, page: pageNo, limit: take });
+  }
+  res.json((await req.db.student.findMany(query)).map(parse));
 });
 
 // GET /api/students/:id
@@ -169,81 +179,133 @@ router.post('/import', authenticate, async (req, res) => {
     return res.status(422).json({ error: 'students array required' });
   }
 
-  const classes = await req.db.class.findMany({ select: { id: true, name: true, grade_level_name: true } });
-  const classByName = new Map(classes.map(c => [c.name.trim().toLowerCase(), c]));
-
   const year = new Date().getFullYear();
   let seq = await req.db.student.count();
 
+  // Preload existing identifiers once instead of querying per row.
+  const usedNumbers = new Set((await req.db.student.findMany({ select: { student_number: true } })).map(s => s.student_number));
+  const usedEmails = new Set((await req.db.user.findMany({ select: { email: true } })).map(u => u.email.toLowerCase()));
+
   const results = { created: 0, errors: [] };
+  const hash = bcrypt.hashSync(DEFAULT_STUDENT_PASSWORD, 10); // same password for all rows — hash once
+  const pending = [];
 
   for (let i = 0; i < students.length; i++) {
     const row = students[i] || {};
-    const firstName = String(row.firstName || '').trim();
-    const lastName = String(row.lastName || '').trim();
-    if (!firstName || !lastName) {
-      results.errors.push({ row: i + 2, reason: 'Missing first or last name' });
+    let firstName = String(row.firstName || '').trim();
+    let lastName = String(row.lastName || '').trim();
+    // Accept a single name (e.g. only a "Name" column): it's stored as the first name.
+    if (!firstName && lastName) { firstName = lastName; lastName = ''; }
+    if (!firstName) {
+      results.errors.push({ row: i + 2, reason: 'Missing student name' });
       continue;
     }
 
-    const matchedClass = row.className ? classByName.get(String(row.className).trim().toLowerCase()) : null;
-
     let studentNumber = String(row.studentNumber || '').trim();
     if (studentNumber) {
-      const dup = await req.db.student.findFirst({ where: { student_number: studentNumber } });
-      if (dup) { results.errors.push({ row: i + 2, reason: `Student number ${studentNumber} already exists` }); continue; }
+      if (usedNumbers.has(studentNumber)) { results.errors.push({ row: i + 2, reason: `Student number ${studentNumber} already exists` }); continue; }
     } else {
       do {
         seq += 1;
         studentNumber = `BSPS-${year}-${String(seq).padStart(3, '0')}`;
-      // eslint-disable-next-line no-await-in-loop
-      } while (await req.db.student.findFirst({ where: { student_number: studentNumber } }));
+      } while (usedNumbers.has(studentNumber));
     }
 
     const loginEmail = `${studentNumber.toLowerCase().replace(/-/g, '')}@school.local`;
-    const existingUser = await req.db.user.findFirst({ where: { email: { equals: loginEmail, mode: 'insensitive' } } });
-    if (existingUser) { results.errors.push({ row: i + 2, reason: `Login already exists for ${studentNumber}` }); continue; }
+    if (usedEmails.has(loginEmail)) { results.errors.push({ row: i + 2, reason: `Login already exists for ${studentNumber}` }); continue; }
+    usedNumbers.add(studentNumber);
+    usedEmails.add(loginEmail);
 
+    const clean = v => { const t = String(v ?? '').trim(); return t === '' ? null : t; };
+    const gender = ['male', 'female', 'other'].includes(String(row.gender || '').trim().toLowerCase()) ? String(row.gender).trim().toLowerCase() : null;
     const isActive = row.isActive === undefined
       ? true
       : !['false', 'no', 'non', 'inactive', '0'].includes(String(row.isActive).trim().toLowerCase());
 
     const id = uuid();
+    const fullName = `${firstName} ${lastName}`.trim();
+    pending.push({
+      rowNo: i + 2,
+      loginEmail,
+      student: {
+        id, student_number: studentNumber, first_name: firstName, last_name: lastName,
+        date_of_birth: clean(row.dateOfBirth), gender,
+        middle_name: clean(row.middleName), address: clean(row.address), city: clean(row.city),
+        mobile_number: clean(row.mobileNumber), guardian_relationship: clean(row.guardianRelationship),
+        class_id: null, // filled in once the classes are resolved below
+        class_name: clean(row.className),
+        grade_level_name: clean(row.gradeLevelName),
+        guardian_name: clean(row.guardianName), guardian_phone: clean(row.guardianPhone),
+        admission_date: clean(row.admissionDate),
+        is_active: isActive,
+      },
+      user: {
+        id: uuid(), name: fullName, email: loginEmail, password_hash: hash, role: 'student',
+        initials: fullName.split(/\s+/).map(w => w[0]).join('').toUpperCase().slice(0, 3),
+        student_id: id, must_change_password: true,
+      },
+    });
+  }
+
+  // Put every student in their classroom: match the spreadsheet's class names to existing classes
+  // ("FORM 1" = "Form 1" = "form one") and create the ones that don't exist yet.
+  const createMissing = req.body.createMissingClasses !== false;
+  const { byKey, created: createdClasses, unmatched } = await resolveClasses(
+    req.db, pending.map(p => p.student.class_name).filter(Boolean), { createMissing },
+  );
+  let unassigned = 0;
+  for (const p of pending) {
+    const match = p.student.class_name ? byKey.get(classKey(p.student.class_name)) : null;
+    if (match) {
+      p.student.class_id = match.id;
+      p.student.class_name = match.name;
+      p.student.grade_level_name = match.grade_level_name || p.student.grade_level_name;
+    } else unassigned++;
+  }
+
+  // Bulk insert in chunks: one transaction of 3 statements per chunk instead of ~5 queries per row.
+  const CHUNK = 200;
+  const createdEmails = [];
+  for (let i = 0; i < pending.length; i += CHUNK) {
+    const chunk = pending.slice(i, i + CHUNK);
     try {
       await req.db.$transaction(async (tx) => {
-        await tx.student.create({
-          data: {
-            id, student_number: studentNumber, first_name: firstName, last_name: lastName,
-            date_of_birth: row.dateOfBirth || null, gender: row.gender || null,
-            class_id: matchedClass?.id || null,
-            class_name: matchedClass?.name || row.className || null,
-            grade_level_name: matchedClass?.grade_level_name || row.gradeLevelName || null,
-            guardian_name: row.guardianName || null, guardian_phone: row.guardianPhone || null,
-            admission_date: row.admissionDate || null,
-            is_active: isActive,
-          },
-        });
-
-        const createdUserId = uuid();
-        const hash = bcrypt.hashSync(DEFAULT_STUDENT_PASSWORD, 10);
-        const fullName = `${firstName} ${lastName}`;
-        const initials = fullName.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 3);
-        await tx.user.create({
-          data: { id: createdUserId, name: fullName, email: loginEmail, password_hash: hash, role: 'student', initials, student_id: id, must_change_password: true },
-        });
-        await tx.student.update({ where: { id }, data: { user_id: createdUserId } });
-      });
-      results.created += 1;
-      try {
-        await platformClient.userDirectory.create({ data: { email: loginEmail, school_id: req.user.school_id, role: 'student' } });
-      } catch (err) {
-        await logDirectorySyncFailure(req, 'import', loginEmail, err);
-      }
+        await tx.student.createMany({ data: chunk.map(p => p.student) });
+        await tx.user.createMany({ data: chunk.map(p => p.user) });
+        // Raw SQL isn't schema-qualified by Prisma, so name the tenant schema explicitly (derived from a UUID, never user input).
+        const schema = schemaNameFor(req.user.school_id);
+        await tx.$executeRawUnsafe(
+          `UPDATE "${schema}".students s SET user_id = u.id FROM "${schema}".users u WHERE u.student_id = s.id AND s.id = ANY($1::text[])`,
+          chunk.map(p => p.student.id),
+        );
+      }, { timeout: 60000 });
+      results.created += chunk.length;
+      createdEmails.push(...chunk.map(p => p.loginEmail));
     } catch (err) {
-      results.errors.push({ row: i + 2, reason: err.message });
+      chunk.forEach(p => results.errors.push({ row: p.rowNo, reason: err.message }));
     }
   }
 
+  if (createdEmails.length > 0) {
+    try {
+      await platformClient.userDirectory.createMany({
+        data: createdEmails.map(email => ({ email, school_id: req.user.school_id, role: 'student' })),
+        skipDuplicates: true,
+      });
+    } catch (err) {
+      await logDirectorySyncFailure(req, 'import', `${createdEmails.length} students`, err);
+    }
+  }
+
+
+  // Keep each touched class's headcount in sync (dashboard reads classes.enrolled).
+  const touched = new Set(pending.map(p => p.student.class_id).filter(Boolean));
+  for (const classId of touched) {
+    const enrolled = await req.db.student.count({ where: { class_id: classId } });
+    await req.db.class.update({ where: { id: classId }, data: { enrolled } }).catch(() => {});
+  }
+
+  results.classes = { created: createdClasses, unmatched, unassigned };
   res.status(201).json(results);
 });
 

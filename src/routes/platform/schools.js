@@ -13,11 +13,47 @@ const { provisionTenantSchema, dropTenantSchema } = require('../../db/provisionT
 const authenticatePlatform = require('../../middleware/authenticatePlatform');
 const authorizePlatform = require('../../middleware/authorizePlatform');
 const { logAction } = require('./_helpers');
+const whatsapp = require('../../utils/whatsapp');
 
 const guard = [authenticatePlatform, authorizePlatform()];
 
 function generateTempPassword() {
-  return `Welcome@${crypto.randomInt(1000, 9999)}`;
+  // Never shown or sent: it only keeps the account unusable until the admin activates it.
+  return crypto.randomBytes(18).toString('base64url');
+}
+
+function loginUrl() {
+  const explicit = process.env.APP_LOGIN_URL || process.env.FRONTEND_URL;
+  return (explicit || require('../../config/env').CORS_ALLOWED_ORIGINS[0] || '').replace(/\/$/, '');
+}
+
+function activationLink(schoolId, userId, passwordHash) {
+  const { signActivationToken } = require('../../auth/activation');
+  return `${loginUrl()}/?activate=${signActivationToken({ schoolId, userId, passwordHash })}`;
+}
+
+// Send the account-activation link over WhatsApp and audit the outcome.
+// Never throws and never writes the password to the audit log.
+async function notifyAdminViaWhatsApp(req, { schoolId, schoolName, adminName, adminEmail, phone, link }) {
+  let result;
+  try {
+    result = await whatsapp.sendSchoolCredentials({
+      to: phone, adminName, schoolName, loginUrl: loginUrl(), username: adminEmail, activationLink: link,
+    });
+  } catch (e) {
+    result = { ok: false, code: 'UNEXPECTED', error: e.message };
+  }
+  await logAction(req, result.ok ? 'school.whatsapp_sent' : 'school.whatsapp_failed', 'school', schoolId, {
+    to_last4: String(phone || '').replace(/\D/g, '').slice(-4),
+    message_id: result.messageId, status: result.status, code: result.code, error: result.error, fbtrace_id: result.fbtraceId,
+  }).catch(() => {});
+  return result;
+}
+
+function whatsappSummary(r) {
+  return r.ok
+    ? { sent: true, message_id: r.messageId, status: r.status }
+    : { sent: false, error: r.error, code: r.code, retryable: !!r.retryable };
 }
 
 async function withLiveCounts(school) {
@@ -76,10 +112,15 @@ router.get('/:id/summary', ...guard, async (req, res) => {
 // POST /api/platform/schools — provisions a brand new isolated tenant
 router.post('/', ...guard, async (req, res) => {
   const { name, phone, address, plan_id, admin_name } = req.body;
+  const admin_phone = req.body.admin_phone?.trim();
   const email = req.body.email?.trim();
   const admin_email = req.body.admin_email?.trim();
   if (!name || !email || !plan_id || !admin_name || !admin_email) {
     return res.status(422).json({ error: 'name, email, plan_id, admin_name, admin_email are required' });
+  }
+  if (admin_phone) {
+    const p = whatsapp.normalizePhone(admin_phone);
+    if (!p.ok) return res.status(422).json({ error: `admin_phone: ${p.error}` });
   }
 
   const directoryHit = await platformClient.userDirectory.findFirst({
@@ -92,6 +133,8 @@ router.post('/', ...guard, async (req, res) => {
 
   const schoolId = uuid();
   const tempPassword = generateTempPassword();
+  const adminUserId = uuid();
+  const passwordHash = bcrypt.hashSync(tempPassword, 10);
 
   try {
     await provisionTenantSchema(schoolId);
@@ -101,12 +144,11 @@ router.post('/', ...guard, async (req, res) => {
       data: { id: 's1', name, code: null, address: address || null, phone: phone || null, email, head_teacher: admin_name, motto: null, logo_url: null },
     });
 
-    const adminUserId = uuid();
     const initials = admin_name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 3) || 'AD';
     await tenantDb.user.create({
       data: {
         id: adminUserId, name: admin_name, email: admin_email,
-        password_hash: bcrypt.hashSync(tempPassword, 10),
+        password_hash: passwordHash,
         role: 'super_admin', initials, must_change_password: true,
       },
     });
@@ -135,7 +177,50 @@ router.post('/', ...guard, async (req, res) => {
   await logAction(req, 'school.created', 'school', schoolId, { name });
 
   const school = await platformClient.school.findUnique({ where: { id: schoolId } });
-  res.status(201).json({ school, admin: { email: admin_email, tempPassword } });
+
+  // The school already exists; a WhatsApp failure must not undo it.
+  const wa = admin_phone
+    ? await notifyAdminViaWhatsApp(req, { schoolId, schoolName: name, adminName: admin_name, adminEmail: admin_email, phone: admin_phone, link: activationLink(schoolId, adminUserId, passwordHash) })
+    : { ok: false, code: 'NO_PHONE', error: 'No WhatsApp number provided' };
+
+  // The activation link is returned to the platform admin only when it could NOT be
+  // delivered, so they can hand it over or use resend-credentials.
+  res.status(201).json({
+    school,
+    admin: wa.ok ? { email: admin_email } : { email: admin_email, activationLink: activationLink(schoolId, adminUserId, passwordHash) },
+    whatsapp: whatsappSummary(wa),
+  });
+});
+
+// POST /api/platform/schools/:id/resend-credentials — invalidates the admin's old password
+// and activation link, then sends a fresh activation link via WhatsApp.
+router.post('/:id/resend-credentials', ...guard, async (req, res) => {
+  const school = await platformClient.school.findUnique({ where: { id: req.params.id } });
+  if (!school) return res.status(404).json({ error: 'School not found' });
+  const phone = (req.body.admin_phone || '').trim();
+  const p = whatsapp.normalizePhone(phone);
+  if (!p.ok) return res.status(422).json({ error: `admin_phone: ${p.error}` });
+
+  const tenantDb = tenantPool.getOrOpen(school.id);
+  const admin = await tenantDb.user.findFirst({ where: { email: { equals: school.admin_email, mode: 'insensitive' } } });
+  if (!admin) return res.status(404).json({ error: 'School administrator account not found' });
+
+  const passwordHash = bcrypt.hashSync(generateTempPassword(), 10);
+  await tenantDb.user.update({
+    where: { id: admin.id },
+    data: { password_hash: passwordHash, must_change_password: true },
+  });
+  const link = activationLink(school.id, admin.id, passwordHash);
+  await require('../../auth/tokens').revokeAllForSchool(school.id).catch(() => {});
+
+  const wa = await notifyAdminViaWhatsApp(req, {
+    schoolId: school.id, schoolName: school.name, adminName: school.admin_name,
+    adminEmail: school.admin_email, phone, link,
+  });
+  res.json({
+    admin: wa.ok ? { email: school.admin_email } : { email: school.admin_email, activationLink: link },
+    whatsapp: whatsappSummary(wa),
+  });
 });
 
 // PUT /api/platform/schools/:id

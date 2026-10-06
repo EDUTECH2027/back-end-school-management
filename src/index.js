@@ -9,6 +9,7 @@ const path      = require('path');
 const express   = require('express');
 const cors      = require('cors');
 const helmet    = require('helmet');
+const compression = require('compression');
 const morgan    = require('morgan');
 const bcrypt    = require('bcryptjs');
 const { v4: uuid } = require('uuid');
@@ -141,6 +142,7 @@ const PORT = process.env.PORT || 3001;
 // balancer. Set TRUST_PROXY=1 in such deployments; leave unset for direct/local.
 app.set('trust proxy', process.env.TRUST_PROXY ? Number(process.env.TRUST_PROXY) || process.env.TRUST_PROXY : false);
 
+app.use(compression()); // gzip JSON + the static frontend (large JS bundles)
 app.use(helmet({ crossOriginResourcePolicy: false }));
 app.use(cors(corsOptions));
 app.use(morgan('dev'));
@@ -208,7 +210,13 @@ app.get('/api/health', (_req, res) => res.json({ status: 'ok', ts: new Date().to
 // ── Desktop mode: serve built React frontend ──────────────────────────────────
 if (process.env.FRONTEND_PATH) {
   const feDir = process.env.FRONTEND_PATH;
-  app.use(express.static(feDir));
+  // Vite fingerprints everything under /assets, so it can be cached forever; index.html must always be revalidated.
+  app.use(express.static(feDir, {
+    setHeaders: (res, file) => {
+      if (/[\\/]assets[\\/]/.test(file)) res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      else if (file.endsWith('index.html')) res.setHeader('Cache-Control', 'no-cache');
+    },
+  }));
   app.get(/^(?!\/api)/, (_req, res) =>
     res.sendFile(path.join(feDir, 'index.html'))
   );

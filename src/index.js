@@ -146,7 +146,11 @@ app.use(compression()); // gzip JSON + the static frontend (large JS bundles)
 app.use(helmet({ crossOriginResourcePolicy: false }));
 app.use(cors(corsOptions));
 app.use(morgan('dev'));
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({
+  limit: '10mb',
+  // Meta signs the exact bytes it sends; keep them for the webhook only.
+  verify: (req, _res, buf) => { if (req.originalUrl.startsWith('/api/webhooks/')) req.rawBody = buf; },
+}));
 app.use(express.urlencoded({ extended: true }));
 app.use('/uploads', express.static(require('./utils/forumUploads').UPLOADS_ROOT));
 
@@ -161,6 +165,7 @@ app.use(licenseGate);
 app.use('/api/license',       licenseRouter);
 app.use('/api/auth/2fa',      auth2faRouter);
 app.use('/api/auth',          authRouter);
+app.use('/api/webhooks/whatsapp', require('./routes/whatsappWebhook')); // public: authenticated by Meta's signature
 app.use('/api/school',        schoolRouter);
 app.use('/api/academic',      academicRouter);
 app.use('/api/subjects',      subjectsRouter);

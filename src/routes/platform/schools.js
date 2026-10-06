@@ -183,13 +183,36 @@ router.post('/', ...guard, async (req, res) => {
     ? await notifyAdminViaWhatsApp(req, { schoolId, schoolName: name, adminName: admin_name, adminEmail: admin_email, phone: admin_phone, link: activationLink(schoolId, adminUserId, passwordHash) })
     : { ok: false, code: 'NO_PHONE', error: 'No WhatsApp number provided' };
 
-  // The activation link is returned to the platform admin only when it could NOT be
-  // delivered, so they can hand it over or use resend-credentials.
+  // The link is always returned so the platform admin can copy and share it by hand if WhatsApp
+  // doesn't deliver (WhatsApp accepting a message does not mean it reached the phone).
   res.status(201).json({
     school,
-    admin: wa.ok ? { email: admin_email } : { email: admin_email, activationLink: activationLink(schoolId, adminUserId, passwordHash) },
+    admin: { email: admin_email, activationLink: activationLink(schoolId, adminUserId, passwordHash) },
     whatsapp: whatsappSummary(wa),
   });
+});
+
+// GET /api/platform/schools/:id/whatsapp-status — what happened to the latest activation message.
+// state: none | accepted (Meta took it, no delivery report yet) | delivered | read | failed
+router.get('/:id/whatsapp-status', ...guard, async (req, res) => {
+  const logs = await platformClient.systemLog.findMany({
+    where: { target_id: req.params.id, action: { startsWith: 'school.whatsapp' } },
+    orderBy: { created_at: 'desc' }, take: 30,
+  });
+  const rows = logs.map(l => {
+    let m = l.meta; if (typeof m === 'string') { try { m = JSON.parse(m); } catch { m = {}; } }
+    return { action: l.action, at: l.created_at, ...(m || {}) };
+  });
+  // Latest send attempt: either accepted by Meta (has a message id) or rejected outright (no message id).
+  const attempt = rows.find(r => r.action === 'school.whatsapp_sent' || (r.action === 'school.whatsapp_failed' && !r.message_id));
+  if (!attempt) return res.json({ state: 'none' });
+  if (attempt.action === 'school.whatsapp_failed') {
+    return res.json({ state: 'failed', error: attempt.error, code: attempt.code, at: attempt.at });
+  }
+  const events = rows.filter(r => r.message_id === attempt.message_id && r.action !== 'school.whatsapp_sent');
+  const pick = ['failed', 'read', 'delivered'].map(st => events.find(e => e.status === st)).find(Boolean);
+  if (pick) return res.json({ state: pick.status, error: pick.error, code: pick.code, at: pick.at, message_id: attempt.message_id });
+  res.json({ state: 'accepted', at: attempt.at, message_id: attempt.message_id });
 });
 
 // POST /api/platform/schools/:id/resend-credentials — invalidates the admin's old password
@@ -218,7 +241,7 @@ router.post('/:id/resend-credentials', ...guard, async (req, res) => {
     adminEmail: school.admin_email, phone, link,
   });
   res.json({
-    admin: wa.ok ? { email: school.admin_email } : { email: school.admin_email, activationLink: link },
+    admin: { email: school.admin_email, activationLink: link },
     whatsapp: whatsappSummary(wa),
   });
 });

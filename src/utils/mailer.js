@@ -5,8 +5,9 @@
  */
 // Transactional email through Brevo (backend only; credentials never reach the browser). Two transports:
 //
-//   SMTP  (default when SMTP_HOST/SMTP_USER/SMTP_PASS are set)   smtp-relay.brevo.com:587
-//   API   (used when BREVO_API_KEY is set; HTTPS, works where SMTP ports are blocked)
+//   API   (used whenever BREVO_API_KEY is set; HTTPS on port 443, so it works on hosts that block SMTP
+//          ports, e.g. Render's free plan)
+//   SMTP  (used when there is no API key but SMTP_HOST/SMTP_USER/SMTP_PASS are set)  smtp-relay.brevo.com:587
 //         POST https://api.brevo.com/v3/smtp/email      header: api-key: <BREVO_API_KEY>
 //
 // The From address must be a validated sender in your Brevo account, otherwise Brevo refuses the mail.
@@ -33,11 +34,11 @@ function cfg() {
   };
 }
 
-/** 'smtp' | 'api' | null — SMTP wins when both are configured. */
+/** 'api' | 'smtp' | null — the HTTPS API wins when both are configured (SMTP ports are often blocked on hosts). */
 function transportMode() {
   const c = cfg();
-  if (c.smtp.host && c.smtp.user && c.smtp.pass && c.senderEmail) return 'smtp';
   if (c.apiKey && c.senderEmail) return 'api';
+  if (c.smtp.host && c.smtp.user && c.smtp.pass && c.senderEmail) return 'smtp';
   return null;
 }
 

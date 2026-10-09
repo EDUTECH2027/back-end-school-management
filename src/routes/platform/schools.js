@@ -5,54 +5,45 @@
  */
 const router = require('express').Router();
 const bcrypt = require('bcryptjs');
-const crypto = require('crypto');
+const path = require('path');
+const fs = require('fs/promises');
 const { v4: uuid } = require('uuid');
 const platformClient = require('../../db/platformClient');
 const tenantPool = require('../../db/tenantPool');
-const { provisionTenantSchema, dropTenantSchema } = require('../../db/provisionTenant');
+const { createTenantSchema, dropTenantSchema } = require('../../db/provisionTenant');
 const authenticatePlatform = require('../../middleware/authenticatePlatform');
 const authorizePlatform = require('../../middleware/authorizePlatform');
 const { logAction } = require('./_helpers');
-const whatsapp = require('../../utils/whatsapp');
+const mailer = require('../../utils/mailer');
+const { UPLOADS_ROOT } = require('../../utils/forumUploads');
 
 const guard = [authenticatePlatform, authorizePlatform()];
-
-function generateTempPassword() {
-  // Never shown or sent: it only keeps the account unusable until the admin activates it.
-  return crypto.randomBytes(18).toString('base64url');
-}
 
 function loginUrl() {
   const explicit = process.env.APP_LOGIN_URL || process.env.FRONTEND_URL;
   return (explicit || require('../../config/env').CORS_ALLOWED_ORIGINS[0] || '').replace(/\/$/, '');
 }
 
-function activationLink(schoolId, userId, passwordHash) {
-  const { signActivationToken } = require('../../auth/activation');
-  return `${loginUrl()}/?activate=${signActivationToken({ schoolId, userId, passwordHash })}`;
-}
-
-// Send the account-activation link over WhatsApp and audit the outcome.
+// Email the administrator their platform URL + first-login credentials and audit the outcome.
 // Never throws and never writes the password to the audit log.
-async function notifyAdminViaWhatsApp(req, { schoolId, schoolName, adminName, adminEmail, phone, link }) {
+async function emailAdminCredentials(req, { schoolId, schoolName, adminName, adminEmail, tempPassword }) {
   let result;
   try {
-    result = await whatsapp.sendSchoolCredentials({
-      to: phone, adminName, schoolName, loginUrl: loginUrl(), username: adminEmail, activationLink: link,
+    result = await mailer.sendSchoolCredentialsEmail({
+      to: adminEmail, adminName, schoolName, loginUrl: loginUrl(), tempPassword,
     });
   } catch (e) {
     result = { ok: false, code: 'UNEXPECTED', error: e.message };
   }
-  await logAction(req, result.ok ? 'school.whatsapp_sent' : 'school.whatsapp_failed', 'school', schoolId, {
-    to_last4: String(phone || '').replace(/\D/g, '').slice(-4),
-    message_id: result.messageId, status: result.status, code: result.code, error: result.error, fbtrace_id: result.fbtraceId,
+  await logAction(req, result.ok ? 'school.credentials_email_sent' : 'school.credentials_email_failed', 'school', schoolId, {
+    to: adminEmail, message_id: result.messageId, code: result.code, error: result.error,
   }).catch(() => {});
   return result;
 }
 
-function whatsappSummary(r) {
+function emailSummary(r) {
   return r.ok
-    ? { sent: true, message_id: r.messageId, status: r.status }
+    ? { sent: true, message_id: r.messageId }
     : { sent: false, error: r.error, code: r.code, retryable: !!r.retryable };
 }
 
@@ -112,32 +103,27 @@ router.get('/:id/summary', ...guard, async (req, res) => {
 // POST /api/platform/schools — provisions a brand new isolated tenant
 router.post('/', ...guard, async (req, res) => {
   const { name, phone, address, plan_id, admin_name } = req.body;
-  const admin_phone = req.body.admin_phone?.trim();
   const email = req.body.email?.trim();
   const admin_email = req.body.admin_email?.trim();
   if (!name || !email || !plan_id || !admin_name || !admin_email) {
     return res.status(422).json({ error: 'name, email, plan_id, admin_name, admin_email are required' });
   }
-  if (admin_phone) {
-    const p = whatsapp.normalizePhone(admin_phone);
-    if (!p.ok) return res.status(422).json({ error: `admin_phone: ${p.error}` });
-  }
 
-  const directoryHit = await platformClient.userDirectory.findFirst({
-    where: { email: { equals: admin_email, mode: 'insensitive' } },
-  });
+  // The two checks are independent, so run them together (each is a round trip to a remote database).
+  const [directoryHit, plan] = await Promise.all([
+    platformClient.userDirectory.findFirst({ where: { email: { equals: admin_email, mode: 'insensitive' } } }),
+    platformClient.subscriptionPlan.findUnique({ where: { id: plan_id } }),
+  ]);
   if (directoryHit) return res.status(409).json({ error: 'Admin email already in use by another school' });
-
-  const plan = await platformClient.subscriptionPlan.findUnique({ where: { id: plan_id } });
   if (!plan) return res.status(422).json({ error: 'Unknown plan_id' });
 
   const schoolId = uuid();
-  const tempPassword = generateTempPassword();
+  const tempPassword = mailer.generateTempPassword();
   const adminUserId = uuid();
   const passwordHash = bcrypt.hashSync(tempPassword, 10);
 
   try {
-    await provisionTenantSchema(schoolId);
+    await createTenantSchema(schoolId); // fast path (~2 s); falls back to prisma migrate deploy
     const tenantDb = tenantPool.getOrOpen(schoolId);
 
     await tenantDb.school.create({
@@ -174,76 +160,104 @@ router.post('/', ...guard, async (req, res) => {
     return res.status(500).json({ error: 'Failed to register school', detail: e.message });
   }
 
-  await logAction(req, 'school.created', 'school', schoolId, { name });
+  // The school is now fully created. Audit log, reading it back and the welcome email don't depend on
+  // each other, so do them together instead of one after another. An email failure never undoes the school.
+  const [, school, mail] = await Promise.all([
+    logAction(req, 'school.created', 'school', schoolId, { name }),
+    platformClient.school.findUnique({ where: { id: schoolId } }),
+    emailAdminCredentials(req, {
+      schoolId, schoolName: name, adminName: admin_name, adminEmail: admin_email, tempPassword,
+    }),
+  ]);
 
-  const school = await platformClient.school.findUnique({ where: { id: schoolId } });
-
-  // The school already exists; a WhatsApp failure must not undo it.
-  const wa = admin_phone
-    ? await notifyAdminViaWhatsApp(req, { schoolId, schoolName: name, adminName: admin_name, adminEmail: admin_email, phone: admin_phone, link: activationLink(schoolId, adminUserId, passwordHash) })
-    : { ok: false, code: 'NO_PHONE', error: 'No WhatsApp number provided' };
-
-  // The link is always returned so the platform admin can copy and share it by hand if WhatsApp
-  // doesn't deliver (WhatsApp accepting a message does not mean it reached the phone).
+  // The temporary password is returned to the platform admin ONLY when the email could not be
+  // sent, so they can hand it over by hand; otherwise it exists nowhere but the admin's inbox.
   res.status(201).json({
     school,
-    admin: { email: admin_email, activationLink: activationLink(schoolId, adminUserId, passwordHash) },
-    whatsapp: whatsappSummary(wa),
+    admin: mail.ok ? { email: admin_email } : { email: admin_email, tempPassword },
+    email: emailSummary(mail),
   });
 });
 
-// GET /api/platform/schools/:id/whatsapp-status — what happened to the latest activation message.
-// state: none | accepted (Meta took it, no delivery report yet) | delivered | read | failed
-router.get('/:id/whatsapp-status', ...guard, async (req, res) => {
-  const logs = await platformClient.systemLog.findMany({
-    where: { target_id: req.params.id, action: { startsWith: 'school.whatsapp' } },
-    orderBy: { created_at: 'desc' }, take: 30,
+// GET /api/platform/schools/:id/credentials-status — outcome of the latest credentials email.
+router.get('/:id/credentials-status', ...guard, async (req, res) => {
+  const last = await platformClient.systemLog.findFirst({
+    where: { target_id: req.params.id, action: { startsWith: 'school.credentials_email' } },
+    orderBy: { created_at: 'desc' },
   });
-  const rows = logs.map(l => {
-    let m = l.meta; if (typeof m === 'string') { try { m = JSON.parse(m); } catch { m = {}; } }
-    return { action: l.action, at: l.created_at, ...(m || {}) };
-  });
-  // Latest send attempt: either accepted by Meta (has a message id) or rejected outright (no message id).
-  const attempt = rows.find(r => r.action === 'school.whatsapp_sent' || (r.action === 'school.whatsapp_failed' && !r.message_id));
-  if (!attempt) return res.json({ state: 'none' });
-  if (attempt.action === 'school.whatsapp_failed') {
-    return res.json({ state: 'failed', error: attempt.error, code: attempt.code, at: attempt.at });
-  }
-  const events = rows.filter(r => r.message_id === attempt.message_id && r.action !== 'school.whatsapp_sent');
-  const pick = ['failed', 'read', 'delivered'].map(st => events.find(e => e.status === st)).find(Boolean);
-  if (pick) return res.json({ state: pick.status, error: pick.error, code: pick.code, at: pick.at, message_id: attempt.message_id });
-  res.json({ state: 'accepted', at: attempt.at, message_id: attempt.message_id });
+  if (!last) return res.json({ state: 'none' });
+  let m = last.meta; if (typeof m === 'string') { try { m = JSON.parse(m); } catch { m = {}; } }
+  const sent = last.action === 'school.credentials_email_sent';
+  res.json({ state: sent ? 'sent' : 'failed', at: last.created_at, to: m?.to, ...(sent ? {} : { error: m?.error, code: m?.code }) });
 });
 
-// POST /api/platform/schools/:id/resend-credentials — invalidates the admin's old password
-// and activation link, then sends a fresh activation link via WhatsApp.
+// POST /api/platform/schools/:id/resend-credentials — sets a NEW temporary password (the old one stops
+// working, existing sessions are revoked) and emails it to the administrator.
 router.post('/:id/resend-credentials', ...guard, async (req, res) => {
   const school = await platformClient.school.findUnique({ where: { id: req.params.id } });
   if (!school) return res.status(404).json({ error: 'School not found' });
-  const phone = (req.body.admin_phone || '').trim();
-  const p = whatsapp.normalizePhone(phone);
-  if (!p.ok) return res.status(422).json({ error: `admin_phone: ${p.error}` });
 
   const tenantDb = tenantPool.getOrOpen(school.id);
   const admin = await tenantDb.user.findFirst({ where: { email: { equals: school.admin_email, mode: 'insensitive' } } });
   if (!admin) return res.status(404).json({ error: 'School administrator account not found' });
 
-  const passwordHash = bcrypt.hashSync(generateTempPassword(), 10);
+  const tempPassword = mailer.generateTempPassword();
   await tenantDb.user.update({
     where: { id: admin.id },
-    data: { password_hash: passwordHash, must_change_password: true },
+    data: { password_hash: bcrypt.hashSync(tempPassword, 10), must_change_password: true },
   });
-  const link = activationLink(school.id, admin.id, passwordHash);
   await require('../../auth/tokens').revokeAllForSchool(school.id).catch(() => {});
 
-  const wa = await notifyAdminViaWhatsApp(req, {
+  const mail = await emailAdminCredentials(req, {
     schoolId: school.id, schoolName: school.name, adminName: school.admin_name,
-    adminEmail: school.admin_email, phone, link,
+    adminEmail: school.admin_email, tempPassword,
   });
   res.json({
-    admin: { email: school.admin_email, activationLink: link },
-    whatsapp: whatsappSummary(wa),
+    admin: mail.ok ? { email: school.admin_email } : { email: school.admin_email, tempPassword },
+    email: emailSummary(mail),
   });
+});
+
+// DELETE /api/platform/schools/:id — PERMANENTLY removes a school: its whole database schema, its
+// registry/login rows, its sessions and its uploaded files. Irreversible, so the caller must type the
+// school's exact name (body: { confirm_name }) — a stray click or a stale tab cannot delete anything.
+router.delete('/:id', ...guard, async (req, res) => {
+  const school = await platformClient.school.findUnique({ where: { id: req.params.id } });
+  if (!school) return res.status(404).json({ error: 'School not found' });
+
+  const typed = String(req.body?.confirm_name ?? '').trim();
+  if (typed !== school.name.trim()) {
+    return res.status(422).json({ error: 'Confirmation does not match: type the school name exactly to delete it.' });
+  }
+
+  // For the audit trail only (best effort — never blocks the deletion).
+  const counts = await withLiveCounts({ id: school.id });
+
+  // 1. Registry first, in one transaction: the school disappears from the app and nobody can log into it.
+  try {
+    await platformClient.$transaction([
+      platformClient.authRefreshToken.deleteMany({ where: { school_id: school.id } }),
+      platformClient.userDirectory.deleteMany({ where: { school_id: school.id } }),
+      platformClient.school.delete({ where: { id: school.id } }),
+    ]);
+  } catch (e) {
+    return res.status(500).json({ error: 'Failed to delete school', detail: e.message });
+  }
+
+  // 2. Then free the space: drop the school's schema (all its tables and data) and its uploaded files.
+  const schemaDropped = await dropTenantSchema(school.id);
+  let filesRemoved = true;
+  if (/^[0-9a-f-]{36}$/i.test(school.id)) { // ids are UUIDs; refuse anything else so the path can never escape uploads/
+    const dir = path.join(UPLOADS_ROOT, school.id);
+    try { await fs.rm(dir, { recursive: true, force: true }); } catch (e) { filesRemoved = false; console.error(`[school delete] could not remove ${dir}:`, e.message); }
+  }
+
+  await logAction(req, 'school.deleted', 'school', school.id, {
+    name: school.name, admin_email: school.admin_email,
+    students: counts.students, teachers: counts.teachers, schema_dropped: schemaDropped, files_removed: filesRemoved,
+  }).catch(() => {});
+
+  res.json({ deleted: true, schema_dropped: schemaDropped, files_removed: filesRemoved });
 });
 
 // PUT /api/platform/schools/:id

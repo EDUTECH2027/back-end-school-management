@@ -77,7 +77,7 @@ const DEFAULT_STUDENT_PASSWORD = 'Welcome@2025';
 // POST /api/students — multipart (photo + document files alongside the usual fields)
 router.post('/', authenticate, upload.fields([{ name: 'photo', maxCount: 1 }, { name: 'documents', maxCount: 10 }]), async (req, res) => {
   const {
-    firstName, middleName, lastName, dateOfBirth, gender,
+    firstName, middleName, lastName, studentNui, dateOfBirth, gender,
     classId, className, gradeLevelName,
     address, city, state, zipCode, mobileNumber, alternateMobileNumber,
     guardianName, guardianPhone, guardianRelationship, admissionDate,
@@ -111,7 +111,7 @@ router.post('/', authenticate, upload.fields([{ name: 'photo', maxCount: 1 }, { 
     await req.db.$transaction(async (tx) => {
       await tx.student.create({
         data: {
-          id, student_number: studentNumber, first_name: firstName, middle_name: middleName || null, last_name: lastName,
+          id, student_number: studentNumber, first_name: firstName, middle_name: middleName || null, last_name: lastName, student_nui: studentNui?.trim() || null,
           date_of_birth: dateOfBirth || null, gender: gender || null,
           class_id: classId || null, class_name: className || null, grade_level_name: gradeLevelName || null,
           photo_url: photoUrl,
@@ -311,13 +311,15 @@ router.post('/import', authenticate, async (req, res) => {
 
 // PUT /api/students/:id
 router.put('/:id', authenticate, async (req, res) => {
-  const { firstName, middleName, lastName, dateOfBirth, gender, classId, className, gradeLevelName,
+  const { firstName, middleName, lastName, studentNui, dateOfBirth, gender, classId, className, gradeLevelName,
           address, city, state, zipCode, mobileNumber, alternateMobileNumber,
           guardianName, guardianPhone, guardianRelationship, admissionDate, isActive, photoUrl, siblingIds } = req.body;
   const updated = await req.db.student.update({
     where: { id: req.params.id },
     data: {
       first_name: firstName, middle_name: middleName || null, last_name: lastName,
+      // Only touched when the client sends it, so older clients can't wipe an existing NUI.
+      ...(studentNui !== undefined && { student_nui: String(studentNui ?? '').trim() || null }),
       date_of_birth: dateOfBirth || null, gender: gender || null,
       class_id: classId || null, class_name: className || null, grade_level_name: gradeLevelName || null,
       address: address || null, city: city || null, state: state || null, zip_code: zipCode || null,

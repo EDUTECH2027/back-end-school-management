@@ -297,6 +297,7 @@ model Student {
   student_number          String    @unique
   first_name              String
   middle_name             String?
+  student_nui             String? // National Unique Identifier
   last_name               String
   date_of_birth           String?
   gender                  Gender?

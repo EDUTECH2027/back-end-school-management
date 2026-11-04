@@ -34,6 +34,24 @@ async function teacherClasses(db, teacherId) {
     (assignedKey && classKey(c.name) === assignedKey));
 }
 
+const subjectKey = (name) => String(name || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/s+/g, ' ').trim();
+
+// The subjects a teacher may teach / enter marks for: the ones on their own record plus any they
+// are timetabled to teach. Names are matched to the subjects table case/accent-insensitively.
+async function teacherSubjects(db, teacherId) {
+  if (!teacherId) return [];
+  const [teacher, slots, all] = await Promise.all([
+    db.teacher.findUnique({ where: { id: teacherId }, select: { subjects: true } }),
+    db.teacherSchedule.findMany({ where: { teacher_id: teacherId }, select: { subject_name: true }, distinct: ['subject_name'] }),
+    db.subject.findMany({ orderBy: { name: 'asc' } }),
+  ]);
+  let recorded = teacher?.subjects ?? [];
+  if (typeof recorded === 'string') { try { recorded = JSON.parse(recorded); } catch { recorded = [recorded]; } }
+  if (!Array.isArray(recorded)) recorded = [];
+  const wanted = new Set([...recorded, ...slots.map(s => s.subject_name)].map(subjectKey).filter(Boolean));
+  return all.filter(s => wanted.has(subjectKey(s.name)));
+}
+
 async function ownsClass(db, classId, teacherId) {
   return (await teacherClasses(db, teacherId)).some(c => c.id === classId);
 }
@@ -86,6 +104,11 @@ router.post('/my-attendance', ...guard, async (req, res) => {
   res.status(201).json(await req.db.teacherAttendance.findFirst({ where: { teacher_id: tid(req), date } }));
 });
 
+// GET /api/portal/teacher/subjects — only the subjects assigned to this teacher
+router.get('/subjects', ...guard, async (req, res) => {
+  res.json(await teacherSubjects(req.db, tid(req)));
+});
+
 // GET /api/portal/teacher/marks?classId=&termId=
 router.get('/marks', ...guard, async (req, res) => {
   const { classId, termId } = req.query;
@@ -101,6 +124,10 @@ router.post('/marks', ...guard, async (req, res) => {
   if (!(await ownsClass(req.db, classId, tid(req)))) return res.status(403).json({ error: 'Not your class' });
   const { is_open } = await getMarksEntryStatus(req.db);
   if (!is_open) return res.status(403).json({ error: 'Marks filling period is closed' });
+
+  // A teacher may only enter marks for the subjects assigned to them.
+  const allowed = new Set((await teacherSubjects(req.db, tid(req))).map(s => s.id));
+  if (marks.some(m => !allowed.has(m.subject_id))) return res.status(403).json({ error: 'You can only enter marks for the subjects assigned to you' });
 
   await req.db.$transaction(marks.map(m => {
     // Total = average of the two sequences (same rule as routes/marks.js and the mark-entry screen).

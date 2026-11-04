@@ -7,14 +7,7 @@ const router = require('express').Router();
 const authenticate = require('../middleware/auth');
 const { v4: uuid } = require('uuid');
 
-const gradeFor = (score) => {
-  if (score >= 90) return { grade: 'A+', remark: 'Excellent' };
-  if (score >= 80) return { grade: 'A',  remark: 'Very Good' };
-  if (score >= 70) return { grade: 'B',  remark: 'Good' };
-  if (score >= 60) return { grade: 'C',  remark: 'Average' };
-  if (score >= 50) return { grade: 'D',  remark: 'Below Average' };
-  return { grade: 'F', remark: 'Fail' };
-};
+const { gradeFor } = require('../utils/grading');
 
 // GET /api/marks?termId=t1&classId=c4&studentId=st6&subjectId=sub1
 router.get('/', authenticate, async (req, res) => {

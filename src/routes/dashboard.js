@@ -5,6 +5,7 @@
  */
 const router = require('express').Router();
 const authenticate = require('../middleware/auth');
+const { withLiveEnrolled } = require('../utils/classCounts');
 
 router.get('/', authenticate, async (req, res) => {
   const today = new Date().toISOString().slice(0, 10);
@@ -17,7 +18,7 @@ router.get('/', authenticate, async (req, res) => {
     req.db.attendanceRecord.count({ where: { date: today, status: 'absent' } }),
     req.db.feeRecord.aggregate({ _sum: { amount_paid: true, balance: true, amount_due: true } }),
     req.db.announcement.findMany({ orderBy: { created_at: 'desc' }, take: 5 }),
-    req.db.class.findMany({ select: { name: true, enrolled: true, capacity: true }, orderBy: { name: 'asc' } }),
+    req.db.class.findMany({ select: { id: true, name: true, enrolled: true, capacity: true }, orderBy: { name: 'asc' } }),
     req.db.feeRecord.groupBy({ by: ['status'], _count: { _all: true }, _sum: { balance: true } }),
   ]);
 
@@ -36,7 +37,7 @@ router.get('/', authenticate, async (req, res) => {
     feesPending: fees._sum.balance || 0,
     feesTotal: fees._sum.amount_due || 0,
     recentAnnouncements,
-    classSizes,
+    classSizes: (await withLiveEnrolled(req.db, classSizes)).map(({ name, enrolled, capacity }) => ({ name, enrolled, capacity })),
     feesByStatus: feesByStatus.map(r => ({ status: r.status, count: r._count._all, total_balance: r._sum.balance })),
   });
 });

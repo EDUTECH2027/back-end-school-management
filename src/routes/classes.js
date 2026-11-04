@@ -7,11 +7,12 @@ const router = require('express').Router();
 const authenticate = require('../middleware/auth');
 const { v4: uuid } = require('uuid');
 const { resolveClasses, classKey } = require('../utils/classMatching');
+const { withLiveEnrolled } = require('../utils/classCounts');
 
 router.get('/', authenticate, async (req, res) => {
   const { grade_level_id } = req.query;
   const where = grade_level_id ? { grade_level_id } : {};
-  res.json(await req.db.class.findMany({ where, orderBy: { name: 'asc' } }));
+  res.json(await withLiveEnrolled(req.db, await req.db.class.findMany({ where, orderBy: { name: 'asc' } })));
 });
 
 // POST /api/classes/sync-from-students — repairs students that carry a class name as text but
@@ -50,7 +51,7 @@ router.post('/sync-from-students', authenticate, async (req, res) => {
 router.get('/:id', authenticate, async (req, res) => {
   const row = await req.db.class.findUnique({ where: { id: req.params.id } });
   if (!row) return res.status(404).json({ error: 'Class not found' });
-  res.json(row);
+  res.json(await withLiveEnrolled(req.db, row));
 });
 
 router.post('/', authenticate, async (req, res) => {
@@ -77,7 +78,7 @@ router.put('/:id', authenticate, async (req, res) => {
       enrolled: enrolled || 0,
     },
   });
-  res.json(updated);
+  res.json(await withLiveEnrolled(req.db, updated));
 });
 
 router.delete('/:id', authenticate, async (req, res) => {

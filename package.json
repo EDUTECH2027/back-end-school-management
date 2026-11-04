@@ -23,7 +23,8 @@
     "license:keygen": "node scripts/license-keygen.js",
     "license:sign": "node scripts/license-sign.js",
     "license:selftest": "node scripts/license-selftest.js",
-    "headers": "node scripts/add-license-headers.js"
+    "headers": "node scripts/add-license-headers.js",
+    "test": "node --test \"tests/*.test.js\""
   },
   "dependencies": {
     "@prisma/client": "6.19.3",

@@ -168,6 +168,7 @@ app.use('/api/auth',          authRouter);
 app.use('/api/webhooks/whatsapp', require('./routes/whatsappWebhook')); // public: authenticated by Meta's signature
 app.use('/api/school',        schoolRouter);
 app.use('/api/academic',      academicRouter);
+app.use('/api/end-of-year',   require('./routes/endOfYear'));
 app.use('/api/subjects',      subjectsRouter);
 app.use('/api/teachers',      teachersRouter);
 app.use('/api/classes',       classesRouter);

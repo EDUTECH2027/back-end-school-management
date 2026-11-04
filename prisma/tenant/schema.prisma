@@ -93,18 +93,28 @@ enum CertificateKind {
   attestation
 }
 
+// End-of-year outcome for one student. `pending_review` = not finalized yet.
+enum YearEndStatus {
+  pending_review
+  promoted
+  repeating
+  withdrawn
+  transferred
+  graduated
+}
+
 // ── Users (auth) ──────────────────────────────────────────────────
 model User {
-  id                   String    @id
+  id                   String  @id
   name                 String
-  email                String    @unique
+  email                String  @unique
   password_hash        String
   role                 Role
   initials             String
   teacher_id           String?
   student_id           String?
   parent_id            String?
-  must_change_password Boolean   @default(false)
+  must_change_password Boolean @default(false)
 
   // Session kill-switch — see AuthRefreshToken / auth hardening.
   token_version Int @default(0)
@@ -120,8 +130,8 @@ model User {
   totp_enrolled_at DateTime?
   recovery_codes   Json? // [{ hash, used_at }]
 
-  created_at           DateTime? @default(now())
-  updated_at           DateTime? @default(now())
+  created_at DateTime? @default(now())
+  updated_at DateTime? @default(now())
 
   teacher Teacher? @relation("UserTeacherRef", fields: [teacher_id], references: [id], onDelete: SetNull)
   student Student? @relation("UserStudentRef", fields: [student_id], references: [id], onDelete: SetNull)
@@ -158,13 +168,16 @@ model School {
 }
 
 model AcademicYear {
-  id         String  @id
+  id         String    @id
   label      String
   start_date String
   end_date   String
-  is_current Boolean @default(false)
+  is_current Boolean   @default(false)
+  // Set when the administrator closes the year; required before a year-end transition is confirmed.
+  closed_at  DateTime?
 
-  terms Term[]
+  terms       Term[]
+  enrollments ClassEnrollment[]
 
   @@map("academic_years")
 }
@@ -189,7 +202,8 @@ model GradeLevel {
   name       String @unique
   sort_order Int    @default(0)
 
-  classes Class[]
+  classes               Class[]
+  coefficient_overrides SubjectCoefficientOverride[]
 
   @@map("grade_levels")
 }
@@ -200,8 +214,9 @@ model Subject {
   code        String @unique
   coefficient Float  @default(1)
 
-  marks               Mark[]
-  report_card_entries ReportCardEntry[]
+  marks                 Mark[]
+  report_card_entries   ReportCardEntry[]
+  coefficient_overrides SubjectCoefficientOverride[]
 
   @@map("subjects")
 }
@@ -258,16 +273,21 @@ model Class {
   class_teacher_id   String?
   class_teacher_name String?
   enrolled           Int       @default(0)
+  // Year-end progression: where promoted students go. Null = infer from grade level order.
+  next_class_id      String?
+  is_final_class     Boolean   @default(false)
   created_at         DateTime? @default(now())
 
-  grade_level        GradeLevel?        @relation(fields: [grade_level_id], references: [id])
-  class_teacher      Teacher?           @relation("ClassTeacher", fields: [class_teacher_id], references: [id], onDelete: SetNull)
-  students           Student[]
-  attendance_records AttendanceRecord[]
-  schedule           TeacherSchedule[]
-  marks              Mark[]
-  fee_records        FeeRecord[]
-  behavior_logs      StudentBehavior[]
+  enrollments           ClassEnrollment[]
+  coefficient_overrides SubjectCoefficientOverride[]
+  grade_level           GradeLevel?                  @relation(fields: [grade_level_id], references: [id])
+  class_teacher         Teacher?                     @relation("ClassTeacher", fields: [class_teacher_id], references: [id], onDelete: SetNull)
+  students              Student[]
+  attendance_records    AttendanceRecord[]
+  schedule              TeacherSchedule[]
+  marks                 Mark[]
+  fee_records           FeeRecord[]
+  behavior_logs         StudentBehavior[]
 
   @@map("classes")
 }
@@ -311,6 +331,8 @@ model Student {
   behavior_logs      StudentBehavior[]
   certificates       Certificate[]
   documents          StudentDocument[]
+  enrollments        ClassEnrollment[]
+  year_end_decisions YearEndDecision[]
 
   @@index([class_id])
   @@map("students")
@@ -733,28 +755,150 @@ model SalaryWithdrawal {
 }
 
 model Certificate {
-  id               String          @id
-  student_id       String
-  student_name     String?
-  student_number   String?
-  class_name       String?
-  doc_type_id      String
-  theme_id         String
-  kind             CertificateKind @default(certificate)
-  doc_label        String
-  body_html        String          @default("")
-  recipient_name   String
-  issue_date       String
-  cert_number      String
-  signatory_name   String?
-  signatory_title  String?
-  style            Json?
-  created_by       String?
-  created_at       DateTime?       @default(now())
-  updated_at       DateTime?       @default(now())
+  id              String          @id
+  student_id      String
+  student_name    String?
+  student_number  String?
+  class_name      String?
+  doc_type_id     String
+  theme_id        String
+  kind            CertificateKind @default(certificate)
+  doc_label       String
+  body_html       String          @default("")
+  recipient_name  String
+  issue_date      String
+  cert_number     String
+  signatory_name  String?
+  signatory_title String?
+  style           Json?
+  created_by      String?
+  created_at      DateTime?       @default(now())
+  updated_at      DateTime?       @default(now())
 
   student Student @relation(fields: [student_id], references: [id], onDelete: Cascade)
 
   @@index([student_id])
   @@map("certificates")
+}
+
+// ── End-of-year: enrollment history, decisions, runs, audit ─────────────────────
+// Student.class_id stays the "current class" pointer used across the app; this table is the
+// per-academic-year history. One class per student per year (the unique key is also what makes
+// the transition safe to retry).
+model ClassEnrollment {
+  id               String    @id
+  student_id       String
+  class_id         String?
+  class_name       String? // snapshot, so history survives a class rename/delete
+  academic_year_id String
+  source           String    @default("manual") // backfill | manual | year_end
+  created_by       String?
+  created_at       DateTime? @default(now())
+
+  student       Student      @relation(fields: [student_id], references: [id], onDelete: Cascade)
+  class         Class?       @relation(fields: [class_id], references: [id], onDelete: SetNull)
+  academic_year AcademicYear @relation(fields: [academic_year_id], references: [id], onDelete: Cascade)
+
+  @@unique([student_id, academic_year_id], name: "enrollment_student_year")
+  @@index([class_id, academic_year_id])
+  @@map("class_enrollments")
+}
+
+// Singleton (id 's1') — the school's promotion rules.
+model YearEndConfig {
+  id                  String    @id
+  pass_average        Float     @default(50) // same 0–100 scale as marks; matches the "D" grade boundary
+  final_class_outcome String    @default("graduate") // graduate | hold — what happens in a class with no next class
+  updated_by          String?
+  updated_at          DateTime? @default(now())
+
+  @@map("year_end_config")
+}
+
+model YearEndDecision {
+  id                 String        @id
+  academic_year_id   String
+  class_id           String?
+  class_name         String?
+  student_id         String
+  calculated_average Float?
+  terms_found        Int           @default(0)
+  terms_expected     Int           @default(3)
+  class_rank         Int?
+  is_complete        Boolean       @default(false)
+  incomplete_reason  String?
+  proposed_status    YearEndStatus @default(pending_review) // what the rules suggest
+  status             YearEndStatus @default(pending_review) // the finalized decision (pending_review until validated)
+  validated_at       DateTime?
+  validated_by       String?
+  validated_by_name  String?
+  is_override        Boolean       @default(false) // final status differs from the proposal
+  comment            String?
+  target_class_id    String? // per-student destination override
+  applied_at         DateTime? // set once the transition has been executed
+  applied_snapshot   Json? // pre-transition state, used by reversal
+  created_at         DateTime?     @default(now())
+  updated_at         DateTime?     @default(now())
+
+  student Student @relation(fields: [student_id], references: [id], onDelete: Cascade)
+
+  @@unique([academic_year_id, student_id], name: "decision_year_student")
+  @@index([academic_year_id, class_id])
+  @@map("year_end_decisions")
+}
+
+model YearEndRun {
+  id                    String    @id
+  academic_year_id      String
+  class_id              String
+  next_academic_year_id String
+  status                String    @default("confirmed") // confirmed | reversed
+  confirmed_by          String?
+  confirmed_by_name     String?
+  confirmed_at          DateTime? @default(now())
+  reversed_by_name      String?
+  reversed_at           DateTime?
+  note                  String?
+  summary               Json?
+
+  @@unique([academic_year_id, class_id], name: "run_year_class")
+  @@map("year_end_runs")
+}
+
+model YearEndAudit {
+  id               String    @id
+  academic_year_id String?
+  class_id         String?
+  student_id       String?
+  run_id           String?
+  action           String // calculated | validated | overridden | confirmed | reversed | year_closed | year_reopened | config_changed | mapping_changed
+  actor_id         String?
+  actor_name       String?
+  details          Json?
+  created_at       DateTime? @default(now())
+
+  @@index([academic_year_id, class_id])
+  @@map("year_end_audit")
+}
+
+// A subject keeps one default coefficient (subjects.coefficient); this table overrides it for a
+// class or for a whole grade level. Lookup order: class → grade level → subject default.
+// Exactly one of class_id / grade_level_id is set (enforced by a CHECK constraint in the migration).
+model SubjectCoefficientOverride {
+  id             String    @id
+  subject_id     String
+  class_id       String?
+  grade_level_id String?
+  coefficient    Float
+  created_at     DateTime? @default(now())
+  updated_at     DateTime? @default(now())
+
+  subject     Subject     @relation(fields: [subject_id], references: [id], onDelete: Cascade)
+  class       Class?      @relation(fields: [class_id], references: [id], onDelete: Cascade)
+  grade_level GradeLevel? @relation(fields: [grade_level_id], references: [id], onDelete: Cascade)
+
+  @@unique([class_id, subject_id], name: "coef_class_subject")
+  @@unique([grade_level_id, subject_id], name: "coef_grade_subject")
+  @@index([subject_id])
+  @@map("subject_coefficient_overrides")
 }

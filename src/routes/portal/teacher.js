@@ -9,6 +9,7 @@ const authenticate = require('../../middleware/auth');
 const authorize = require('../../middleware/authorize');
 const { sortByDay } = require('../../utils/dayOrder');
 const { getMarksEntryStatus } = require('../../routes/marksSettings');
+const { withLiveEnrolled } = require('../../utils/classCounts');
 
 const guard = [authenticate, authorize('teacher', 'head_teacher', 'super_admin')];
 const tid = req => req.user.teacher_id;
@@ -33,7 +34,7 @@ router.put('/profile', ...guard, async (req, res) => {
 
 // GET /api/portal/teacher/classes
 router.get('/classes', ...guard, async (req, res) => {
-  res.json(await req.db.class.findMany({ where: { class_teacher_id: tid(req) } }));
+  res.json(await withLiveEnrolled(req.db, await req.db.class.findMany({ where: { class_teacher_id: tid(req) } })));
 });
 
 // GET /api/portal/teacher/timetable

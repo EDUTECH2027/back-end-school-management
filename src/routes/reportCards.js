@@ -7,6 +7,7 @@ const router = require('express').Router();
 const authenticate = require('../middleware/auth');
 const { v4: uuid } = require('uuid');
 const { weightedSequenceAverages, getAnnualSummary } = require('../utils/reportCardMath');
+const { coefficientsFor: classCoefficients } = require('../utils/coefficients');
 
 const ENTRIES_INCLUDE = { entries: { orderBy: { subject_name: 'asc' } } };
 const withEntries = (card) => card;
@@ -38,12 +39,11 @@ router.post('/generate', authenticate, async (req, res) => {
     .map(([id, name]) => ({ subject_id: id, subject_name: name }))
     .sort((a, b) => String(a.subject_name).localeCompare(String(b.subject_name)));
 
-  // Coefficients as of *now* — snapshotted onto each entry below so a later
-  // edit to a subject's coefficient doesn't retroactively change this card.
-  const subjectRows = allSubjects.length
-    ? await req.db.subject.findMany({ where: { id: { in: allSubjects.map(s => s.subject_id) } } })
-    : [];
-  const coefficientById = Object.fromEntries(subjectRows.map(s => [s.id, s.coefficient]));
+  // Coefficients as of *now*, for THIS class (class override → grade-level override → subject
+  // default) — snapshotted onto each entry below so a later edit doesn't retroactively change this card.
+  const coefficientById = allSubjects.length
+    ? await classCoefficients(req.db, { classId, subjectIds: allSubjects.map(s => s.subject_id) })
+    : {};
 
   // Build per-student mark lookup: studentId → subjectId → mark row
   const marksByStudent = {};
@@ -184,12 +184,12 @@ router.get('/:id', authenticate, async (req, res) => {
 });
 
 // Looks up the current coefficient for each subject referenced by a set of
-// client-supplied entries (never trust a client-supplied coefficient).
-async function coefficientsFor(db, entries) {
+// client-supplied entries (never trust a client-supplied coefficient). `scope` names the
+// class the card belongs to ({ classId } or { className }) so per-class overrides apply.
+async function coefficientsFor(db, entries, scope) {
   if (entries.length === 0) return {};
   const subjectIds = [...new Set(entries.map(e => e.subjectId))];
-  const rows = await db.subject.findMany({ where: { id: { in: subjectIds } } });
-  return Object.fromEntries(rows.map(s => [s.id, s.coefficient]));
+  return classCoefficients(db, { ...scope, subjectIds });
 }
 
 // POST /api/report-cards
@@ -203,7 +203,7 @@ router.post('/', authenticate, async (req, res) => {
   const ay = term ? await req.db.academicYear.findUnique({ where: { id: term.academic_year_id } }) : null;
   if (!student) return res.status(404).json({ error: 'Student not found' });
 
-  const coefficientById = await coefficientsFor(req.db, entries);
+  const coefficientById = await coefficientsFor(req.db, entries, { classId: student.class_id, className: student.class_name });
   const { sequence1Average, sequence2Average, termAverage } = weightedSequenceAverages(
     entries.map(e => ({ ca_score: e.caScore || 0, exam_score: e.examScore || 0, coefficient: coefficientById[e.subjectId] ?? 1 }))
   );
@@ -252,7 +252,10 @@ router.put('/:id', authenticate, async (req, res) => {
     // When entries are being replaced, the average/percentage must be
     // recomputed from them — otherwise a manual edit would silently leave a
     // stale average on the card (a pre-existing gap this fixes in passing).
-    const coefficientById = Array.isArray(entries) ? await coefficientsFor(req.db, entries) : {};
+    // The card's own class (kept as text on the card), not the student's current one: a student
+    // promoted since must not have an old card re-weighted with the new class's coefficients.
+    const card = Array.isArray(entries) ? await req.db.reportCard.findUnique({ where: { id: req.params.id }, select: { class_name: true } }) : null;
+    const coefficientById = Array.isArray(entries) ? await coefficientsFor(req.db, entries, { className: card?.class_name }) : {};
     const averages = Array.isArray(entries)
       ? weightedSequenceAverages(
           entries.map(e => ({ ca_score: e.caScore || 0, exam_score: e.examScore || 0, coefficient: coefficientById[e.subjectId] ?? 1 }))

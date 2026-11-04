@@ -41,7 +41,7 @@ router.post('/', authenticate, async (req, res) => {
   for (const r of records) {
     if (!r.studentId || !r.subjectId || !r.termId) continue;
     try {
-      const total = Math.round(((r.caScore || 0) + (r.examScore || 0)) / 2);
+      const total = Math.round((((r.caScore || 0) + (r.examScore || 0)) / 2) * 10) / 10;
       const { grade, remark } = gradeFor(total);
       await req.db.mark.upsert({
         where: { marks_student_subject_term: { student_id: r.studentId, subject_id: r.subjectId, term_id: r.termId } },
@@ -68,7 +68,7 @@ router.post('/', authenticate, async (req, res) => {
 // PUT /api/marks/:id
 router.put('/:id', authenticate, async (req, res) => {
   const { caScore, examScore, grade, remark } = req.body;
-  const total = Math.round(((caScore || 0) + (examScore || 0)) / 2);
+  const total = Math.round((((caScore || 0) + (examScore || 0)) / 2) * 10) / 10;
   const auto = gradeFor(total);
   const updated = await req.db.mark.update({
     where: { id: req.params.id },

@@ -104,7 +104,7 @@ router.get('/config', adminOnly, async (req, res) => {
 router.put('/config', adminOnly, async (req, res) => {
   const { passAverage, finalClassOutcome } = req.body;
   const pass = Number(passAverage);
-  if (!Number.isFinite(pass) || pass < 0 || pass > 100) throw new HttpError(422, 'passAverage must be a number between 0 and 100');
+  if (!Number.isFinite(pass) || pass < 0 || pass > 20) throw new HttpError(422, 'passAverage must be a number between 0 and 20');
   if (!['graduate', 'hold'].includes(finalClassOutcome)) throw new HttpError(422, "finalClassOutcome must be 'graduate' or 'hold'");
   const before = await getConfig(req.db);
   const saved = await req.db.yearEndConfig.update({

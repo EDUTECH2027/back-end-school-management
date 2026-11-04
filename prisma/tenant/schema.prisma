@@ -807,7 +807,7 @@ model ClassEnrollment {
 // Singleton (id 's1') — the school's promotion rules.
 model YearEndConfig {
   id                  String    @id
-  pass_average        Float     @default(50) // same 0–100 scale as marks; matches the "D" grade boundary
+  pass_average        Float     @default(10) // same 0–20 scale as marks; matches the "D" grade boundary
   final_class_outcome String    @default("graduate") // graduate | hold — what happens in a class with no next class
   updated_by          String?
   updated_at          DateTime? @default(now())

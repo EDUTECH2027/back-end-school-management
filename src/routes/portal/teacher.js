@@ -103,7 +103,8 @@ router.post('/marks', ...guard, async (req, res) => {
   if (!is_open) return res.status(403).json({ error: 'Marks filling period is closed' });
 
   await req.db.$transaction(marks.map(m => {
-    const total = (m.ca_score || 0) + (m.exam_score || 0);
+    // Total = average of the two sequences (same rule as routes/marks.js and the mark-entry screen).
+    const total = Math.round((((m.ca_score || 0) + (m.exam_score || 0)) / 2) * 10) / 10;
     return req.db.mark.upsert({
       where: { marks_student_subject_term: { student_id: m.student_id, subject_id: m.subject_id, term_id: termId } },
       update: { ca_score: m.ca_score ?? 0, exam_score: m.exam_score ?? 0, total_score: total, grade: m.grade || null, remark: m.remark || null, updated_at: new Date() },

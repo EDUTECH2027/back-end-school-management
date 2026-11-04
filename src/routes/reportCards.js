@@ -88,7 +88,7 @@ router.post('/generate', authenticate, async (req, res) => {
       for (const student of students) {
         const stuMarks = marksByStudent[student.id] || {};
         const { sequence1Average, sequence2Average, termAverage, totalObtained } = averagesById[student.id];
-        const totalPossible = allSubjects.length * 100;
+        const totalPossible = allSubjects.length * 20;
         const position = positions[student.id];
 
         const existing = await tx.reportCard.findFirst({ where: { student_id: student.id, term_id: termId } });
@@ -208,7 +208,7 @@ router.post('/', authenticate, async (req, res) => {
     entries.map(e => ({ ca_score: e.caScore || 0, exam_score: e.examScore || 0, coefficient: coefficientById[e.subjectId] ?? 1 }))
   );
   const totalObtained = entries.reduce((s, e) => s + (e.totalScore || 0), 0);
-  const totalPossible = entries.length * 100;
+  const totalPossible = entries.length * 20;
 
   const id = uuid();
   try {
@@ -270,7 +270,7 @@ router.put('/:id', authenticate, async (req, res) => {
         status: status || 'draft', updated_at: new Date(),
         ...(averages && {
           percentage: averages.termAverage, sequence1_average: averages.sequence1Average, sequence2_average: averages.sequence2Average,
-          total_marks_obtained: entries.reduce((s, e) => s + (e.totalScore || 0), 0), total_marks_possible: entries.length * 100,
+          total_marks_obtained: entries.reduce((s, e) => s + (e.totalScore || 0), 0), total_marks_possible: entries.length * 20,
         }),
       },
     });

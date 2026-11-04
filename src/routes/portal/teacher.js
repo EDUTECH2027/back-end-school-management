@@ -8,7 +8,7 @@ const { v4: uuid } = require('uuid');
 const authenticate = require('../../middleware/auth');
 const authorize = require('../../middleware/authorize');
 const { sortByDay } = require('../../utils/dayOrder');
-const { getMarksEntryStatus } = require('../../routes/marksSettings');
+const { getSequenceStatuses, TERM_SEQUENCES } = require('../../routes/marksSettings');
 const { withLiveEnrolled } = require('../../utils/classCounts');
 const { classKey } = require('../../utils/classMatching');
 
@@ -122,12 +122,37 @@ router.post('/marks', ...guard, async (req, res) => {
   const { classId, termId, marks } = req.body;
   if (!classId || !termId || !Array.isArray(marks)) return res.status(422).json({ error: 'classId, termId, marks[] required' });
   if (!(await ownsClass(req.db, classId, tid(req)))) return res.status(403).json({ error: 'Not your class' });
-  const { is_open } = await getMarksEntryStatus(req.db);
-  if (!is_open) return res.status(403).json({ error: 'Marks filling period is closed' });
+
+  // Only the sequences the admin has opened can be filled. The term's first mark is its odd
+  // sequence and its second mark the even one, so each mark column is checked on its own.
+  const term = await req.db.term.findUnique({ where: { id: termId }, select: { name: true } });
+  const termSequences = TERM_SEQUENCES[term?.name];
+  if (!termSequences) return res.status(422).json({ error: 'Term not found' });
+  const canEnter = Object.fromEntries((await getSequenceStatuses(req.db)).map(s => [s.sequence, s.can_enter]));
+  const [firstSeq, secondSeq] = termSequences;
+  if (!canEnter[firstSeq] && !canEnter[secondSeq]) {
+    return res.status(403).json({ error: `Marks entry is closed: neither Sequence ${firstSeq} nor Sequence ${secondSeq} is open` });
+  }
 
   // A teacher may only enter marks for the subjects assigned to them.
   const allowed = new Set((await teacherSubjects(req.db, tid(req))).map(s => s.id));
   if (marks.some(m => !allowed.has(m.subject_id))) return res.status(403).json({ error: 'You can only enter marks for the subjects assigned to you' });
+
+  // A mark column whose sequence is closed must stay exactly as stored (the screen resends untouched values).
+  const stored = await req.db.mark.findMany({
+    where: { term_id: termId, student_id: { in: marks.map(m => m.student_id) }, subject_id: { in: marks.map(m => m.subject_id) } },
+    select: { student_id: true, subject_id: true, ca_score: true, exam_score: true },
+  });
+  const storedBy = new Map(stored.map(r => [`${r.student_id}|${r.subject_id}`, r]));
+  for (const m of marks) {
+    const before = storedBy.get(`${m.student_id}|${m.subject_id}`);
+    if (!canEnter[firstSeq] && (m.ca_score ?? 0) !== (before?.ca_score ?? 0)) {
+      return res.status(403).json({ error: `Sequence ${firstSeq} is not open for marks entry` });
+    }
+    if (!canEnter[secondSeq] && (m.exam_score ?? 0) !== (before?.exam_score ?? 0)) {
+      return res.status(403).json({ error: `Sequence ${secondSeq} is not open for marks entry` });
+    }
+  }
 
   await req.db.$transaction(marks.map(m => {
     // Total = average of the two sequences (same rule as routes/marks.js and the mark-entry screen).

@@ -506,6 +506,20 @@ model MarksEntryPeriod {
   @@map("marks_entry_periods")
 }
 
+// One row per sequence (1-6). Each sequence is opened and closed independently; a teacher can only
+// enter/modify the marks of a sequence whose session is open (and, if the optional time window
+// above is enforced, only inside that window).
+model MarksEntrySession {
+  sequence   Int       @id
+  is_open    Boolean   @default(false)
+  opened_at  DateTime?
+  closed_at  DateTime?
+  updated_by String?
+  updated_at DateTime? @default(now())
+
+  @@map("marks_entry_sessions")
+}
+
 // Singleton row (id always 's1') holding an admin-uploaded PDF used as the
 // visual layout for generated report cards, plus the field-position map
 // (JSON array) placed on top of it via the template designer.

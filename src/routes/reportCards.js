@@ -147,6 +147,60 @@ router.post('/generate', authenticate, async (req, res) => {
   res.status(201).json({ generated });
 });
 
+// GET /api/report-cards/student-extras?classId=&termId=
+// Extra per-student facts a structured report-card template can print, read from existing data only:
+//  - repeater: true when the student's latest APPLIED year-end decision is "repeating", false when it is
+//    anything else, null when the student has no year-end history (unknown: nothing is ticked)
+//  - justified / unjustified absences: attendance records of the class inside the term's dates
+//    (status excused = justified, absent = unjustified)
+// Must be defined before /:id to avoid route collision
+router.get('/student-extras', authenticate, async (req, res) => {
+  const { classId, termId } = req.query;
+  if (!classId) return res.status(422).json({ error: 'classId required' });
+  try {
+    const students = await req.db.student.findMany({ where: { class_id: classId }, select: { id: true } });
+    const ids = students.map(s => s.id);
+    const term = termId ? await req.db.term.findUnique({ where: { id: termId } }) : null;
+
+    const [decisions, years, attendance] = await Promise.all([
+      req.db.yearEndDecision.findMany({
+        where: { student_id: { in: ids }, applied_at: { not: null } },
+        select: { student_id: true, status: true, academic_year_id: true },
+      }),
+      req.db.academicYear.findMany({ select: { id: true, start_date: true } }),
+      term
+        ? req.db.attendanceRecord.findMany({
+            where: { student_id: { in: ids }, date: { gte: term.start_date, lte: term.end_date }, status: { in: ['absent', 'excused'] } },
+            select: { student_id: true, status: true },
+          })
+        : Promise.resolve([]),
+    ]);
+
+    const yearStart = new Map(years.map(y => [y.id, y.start_date]));
+    const latest = new Map();
+    for (const d of decisions) {
+      const prev = latest.get(d.student_id);
+      if (!prev || String(yearStart.get(d.academic_year_id) || '') > String(yearStart.get(prev.academic_year_id) || '')) latest.set(d.student_id, d);
+    }
+    const abs = new Map();
+    for (const a of attendance) {
+      const row = abs.get(a.student_id) || { justified: 0, unjustified: 0 };
+      if (a.status === 'excused') row.justified += 1; else row.unjustified += 1;
+      abs.set(a.student_id, row);
+    }
+
+    res.json(ids.map(id => ({
+      studentId: id,
+      repeater: latest.has(id) ? latest.get(id).status === 'repeating' : null,
+      justifiedAbsences: abs.get(id)?.justified ?? 0,
+      unjustifiedAbsences: abs.get(id)?.unjustified ?? 0,
+    })));
+  } catch (err) {
+    console.error('[GET /report-cards/student-extras]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/report-cards/annual-summary?studentId=&academicYearId=
 // Must be defined before /:id to avoid route collision
 router.get('/annual-summary', authenticate, async (req, res) => {

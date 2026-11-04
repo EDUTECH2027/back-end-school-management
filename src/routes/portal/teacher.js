@@ -10,12 +10,32 @@ const authorize = require('../../middleware/authorize');
 const { sortByDay } = require('../../utils/dayOrder');
 const { getMarksEntryStatus } = require('../../routes/marksSettings');
 const { withLiveEnrolled } = require('../../utils/classCounts');
+const { classKey } = require('../../utils/classMatching');
 
 const guard = [authenticate, authorize('teacher', 'head_teacher', 'super_admin')];
 const tid = req => req.user.teacher_id;
 
+// Every class a teacher is responsible for, however the admin assigned them:
+//  1. formal class teacher (classes.class_teacher_id)
+//  2. teaching a period of the class in the timetable (teacher_schedule)
+//  3. the "class assigned" set on the teacher's own record (matched by class name)
+async function teacherClasses(db, teacherId) {
+  if (!teacherId) return [];
+  const [teacher, slots] = await Promise.all([
+    db.teacher.findUnique({ where: { id: teacherId }, select: { class_assigned: true } }),
+    db.teacherSchedule.findMany({ where: { teacher_id: teacherId }, select: { class_id: true }, distinct: ['class_id'] }),
+  ]);
+  const assignedKey = teacher?.class_assigned ? classKey(teacher.class_assigned) : '';
+  const timetableIds = slots.map(s => s.class_id).filter(Boolean);
+  const all = await db.class.findMany({ orderBy: { name: 'asc' } });
+  return all.filter(c =>
+    c.class_teacher_id === teacherId ||
+    timetableIds.includes(c.id) ||
+    (assignedKey && classKey(c.name) === assignedKey));
+}
+
 async function ownsClass(db, classId, teacherId) {
-  return !!(await db.class.findFirst({ where: { id: classId, class_teacher_id: teacherId } }));
+  return (await teacherClasses(db, teacherId)).some(c => c.id === classId);
 }
 
 // GET /api/portal/teacher/profile
@@ -34,7 +54,7 @@ router.put('/profile', ...guard, async (req, res) => {
 
 // GET /api/portal/teacher/classes
 router.get('/classes', ...guard, async (req, res) => {
-  res.json(await withLiveEnrolled(req.db, await req.db.class.findMany({ where: { class_teacher_id: tid(req) } })));
+  res.json(await withLiveEnrolled(req.db, await teacherClasses(req.db, tid(req))));
 });
 
 // GET /api/portal/teacher/timetable

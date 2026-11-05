@@ -153,6 +153,8 @@ app.use(express.json({
 }));
 app.use(express.urlencoded({ extended: true }));
 app.use('/uploads', express.static(require('./utils/forumUploads').UPLOADS_ROOT));
+// The report-card template PDF lives in the database (disk files vanish on redeploy): serve it when the disk copy is gone.
+app.get('/uploads/:schoolId/report-card-template/:file', reportCardTemplateRouter.serveStoredFile);
 
 // Broad rate limit across the whole API; the auth endpoints add a tighter one.
 // ─── SECURITY DISABLED (temporary) — uncomment to re-enable API rate limiting ───

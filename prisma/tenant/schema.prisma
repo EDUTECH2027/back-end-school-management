@@ -531,6 +531,7 @@ model ReportCardTemplate {
   page_width  Float?
   page_height Float?
   fields      Json?
+  file_data   Bytes?    // the PDF itself (server disk is ephemeral)
   updated_at  DateTime? @default(now())
 
   @@map("report_card_templates")

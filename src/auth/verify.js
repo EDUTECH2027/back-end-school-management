@@ -10,6 +10,7 @@ const jwt = require('jsonwebtoken');
 const env = require('../config/env');
 const platformClient = require('../db/platformClient');
 const tenantPool = require('../db/tenantPool');
+const authCache = require('./authCache');
 
 function fail(message, status, code) {
   const err = new Error(message);
@@ -37,8 +38,12 @@ async function verifyAccess(token, expectedScope) {
     throw fail('Forbidden', 403);
   }
 
-  let subject;
-  if (payload.scope === 'platform') {
+  if (payload.scope !== 'platform' && payload.scope !== 'tenant') throw fail('Token invalid', 401, 'token_invalid');
+  const schoolKey = payload.scope === 'tenant' ? payload.school_id : null;
+  let subject = authCache.getSubject(payload.scope, schoolKey, payload.id);
+  if (subject) {
+    // cache hit: no database round trip
+  } else if (payload.scope === 'platform') {
     subject = await platformClient.platformAdmin.findUnique({
       where: { id: payload.id },
       select: { token_version: true, totp_enabled: true, role: true },
@@ -49,11 +54,10 @@ async function verifyAccess(token, expectedScope) {
       where: { id: payload.id },
       select: { token_version: true, totp_enabled: true, role: true },
     });
-  } else {
-    throw fail('Token invalid', 401, 'token_invalid');
   }
 
   if (!subject) throw fail('Account not found', 401, 'subject_missing');
+  authCache.setSubject(payload.scope, schoolKey, payload.id, subject);
   if ((payload.tv || 0) !== (subject.token_version || 0)) {
     throw fail('Session is no longer valid. Please sign in again.', 401, 'token_version_stale');
   }

@@ -6,6 +6,7 @@
 const platformClient = require('../db/platformClient');
 const tenantPool = require('../db/tenantPool');
 const { verifyAccess } = require('../auth/verify');
+const authCache = require('../auth/authCache');
 
 module.exports = async function authenticate(req, res, next) {
   const header = req.headers['authorization'];
@@ -20,10 +21,7 @@ module.exports = async function authenticate(req, res, next) {
     return res.status(e.status || 401).json({ error: e.message, ...(e.code ? { code: e.code } : {}) });
   }
 
-  const school = await platformClient.school.findUnique({
-    where: { id: payload.school_id },
-    select: { status: true },
-  });
+  const school = await authCache.schoolStatus(platformClient, payload.school_id);
   if (!school) return res.status(404).json({ error: 'School not found' });
   if (school.status !== 'active') return res.status(403).json({ error: 'School account is not active' });
 

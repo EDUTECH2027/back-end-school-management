@@ -12,6 +12,7 @@ const tenantPool = require('../db/tenantPool');
 const authenticate = require('../middleware/auth');
 const { authLimiter } = require('../middleware/rateLimit');
 
+const authCache = require('../auth/authCache');
 const lockout = require('../auth/lockout');
 const totp = require('../auth/totp');
 const {
@@ -90,15 +91,17 @@ router.post('/login',
     const lookupEmail = isEmailLogin ? identifier : directoryEmailForStudentNumber(identifier);
 
     // ── Platform admin? ──
-    const platformAdmin = await platformClient.platformAdmin.findFirst({
-      where: { email: { equals: lookupEmail, mode: 'insensitive' } },
-    });
+    // Both directory lookups are independent: run them together (one round trip instead of two).
+    const [platformAdmin, dirEntry] = await Promise.all([
+      platformClient.platformAdmin.findFirst({ where: { email: { equals: lookupEmail, mode: 'insensitive' } } }),
+      platformClient.userDirectory.findFirst({ where: { email: { equals: lookupEmail, mode: 'insensitive' } } }),
+    ]);
     if (platformAdmin) {
       // ─── SECURITY DISABLED (temporary) — account lockout ───────────────────
       // try { lockout.assertNotLocked(platformAdmin); }
       // catch (e) { return res.status(e.status).set('Retry-After', String(e.retryAfterSeconds)).json({ error: e.message }); }
 
-      if (!bcrypt.compareSync(password, platformAdmin.password_hash)) {
+      if (!(await bcrypt.compare(password, platformAdmin.password_hash))) { // async: bcrypt must not block the event loop
         // await lockout.registerFailure(platformClient.platformAdmin, platformAdmin);
         return invalidCredentials(res);
       }
@@ -108,14 +111,9 @@ router.post('/login',
     }
 
     // ── Tenant user (via cross-tenant directory) ──
-    const dirEntry = await platformClient.userDirectory.findFirst({
-      where: { email: { equals: lookupEmail, mode: 'insensitive' } },
-    });
     if (!dirEntry) return invalidCredentials(res);
 
-    const school = await platformClient.school.findUnique({
-      where: { id: dirEntry.school_id }, select: { status: true },
-    });
+    const school = await authCache.schoolStatus(platformClient, dirEntry.school_id);
     if (!school || school.status !== 'active') {
       return res.status(403).json({ error: 'School account is not active' });
     }
@@ -131,7 +129,7 @@ router.post('/login',
     // catch (e) { return res.status(e.status).set('Retry-After', String(e.retryAfterSeconds)).json({ error: e.message }); }
 
     const badPassword = isEmailLogin
-      ? !bcrypt.compareSync(password, user.password_hash)
+      ? !(await bcrypt.compare(password, user.password_hash))
       : user.role !== 'student';
     if (badPassword) {
       // await lockout.registerFailure(tenantDb.user, user);

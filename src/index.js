@@ -22,6 +22,7 @@ const { apiLimiter } = require('./middleware/rateLimit');
 
 const platformClient = require('./db/platformClient');
 const { provisionTenantSchema } = require('./db/provisionTenant');
+const tenantPool = require('./db/tenantPool');
 const errorHandler = require('./middleware/errorHandler');
 const licenseGate = require('./license/middleware');
 const licenseState = require('./license/state');
@@ -86,6 +87,9 @@ async function bootstrap() {
       console.error(`[server] Failed to migrate tenant ${school.id}:`, e.message);
     }
   }
+  // Open each school's database connection now so the first login doesn't pay for the cold connect.
+  platformClient.$connect().catch(() => {});
+  for (const school of schools) tenantPool.getOrOpen(school.id).$connect().catch(() => {});
 }
 
 const authRouter         = require('./routes/auth');

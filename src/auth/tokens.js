@@ -22,6 +22,7 @@ const { v4: uuid } = require('uuid');
 const env = require('../config/env');
 const platformClient = require('../db/platformClient');
 const tenantPool = require('../db/tenantPool');
+const authCache = require('./authCache');
 const { MANDATORY_2FA_ROLES, SCHOOL_ADMIN_ROLES } = require('./roles');
 
 const sha256 = s => crypto.createHash('sha256').update(String(s)).digest('hex');
@@ -75,13 +76,13 @@ async function loadSubject({ subjectType, subjectId, schoolId }) {
     };
   }
 
-  const school = await platformClient.school.findUnique({
-    where: { id: schoolId }, select: { status: true },
-  });
-  if (!school || school.status !== 'active') return null;
-
   const db = tenantPool.getOrOpen(schoolId);
-  const row = await db.user.findUnique({ where: { id: subjectId } });
+  // independent lookups: run together
+  const [school, row] = await Promise.all([
+    authCache.schoolStatus(platformClient, schoolId),
+    db.user.findUnique({ where: { id: subjectId } }),
+  ]);
+  if (!school || school.status !== 'active') return null;
   if (!row) return null;
 
   let mandatory = false;
@@ -222,6 +223,7 @@ async function bumpTokenVersion({ subjectType, subjectId, schoolId, model }) {
     ? platformClient.platformAdmin
     : tenantPool.getOrOpen(schoolId).user);
   await m.update({ where: { id: subjectId }, data: { token_version: { increment: 1 } } });
+  authCache.evictSubject(subjectType === 'platform' ? 'platform' : 'tenant', schoolId, subjectId); // revocation must be immediate
 }
 
 /** Bump token_version AND revoke every refresh token — a full "log this subject out everywhere". */

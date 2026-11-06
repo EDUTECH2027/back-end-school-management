@@ -17,6 +17,9 @@ const { logAction } = require('./_helpers');
 const mailer = require('../../utils/mailer');
 const { UPLOADS_ROOT } = require('../../utils/forumUploads');
 
+// Every new school administrator starts with this password and must replace it at first login (must_change_password).
+const DEFAULT_ADMIN_PASSWORD = 'Welcome@2025';
+
 const guard = [authenticatePlatform, authorizePlatform()];
 
 function loginUrl() {
@@ -118,7 +121,7 @@ router.post('/', ...guard, async (req, res) => {
   if (!plan) return res.status(422).json({ error: 'Unknown plan_id' });
 
   const schoolId = uuid();
-  const tempPassword = mailer.generateTempPassword();
+  const tempPassword = DEFAULT_ADMIN_PASSWORD;
   const adminUserId = uuid();
   const passwordHash = bcrypt.hashSync(tempPassword, 10);
 
@@ -201,7 +204,7 @@ router.post('/:id/resend-credentials', ...guard, async (req, res) => {
   const admin = await tenantDb.user.findFirst({ where: { email: { equals: school.admin_email, mode: 'insensitive' } } });
   if (!admin) return res.status(404).json({ error: 'School administrator account not found' });
 
-  const tempPassword = mailer.generateTempPassword();
+  const tempPassword = DEFAULT_ADMIN_PASSWORD;
   await tenantDb.user.update({
     where: { id: admin.id },
     data: { password_hash: bcrypt.hashSync(tempPassword, 10), must_change_password: true },

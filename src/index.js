@@ -150,6 +150,8 @@ app.use(compression()); // gzip JSON + the static frontend (large JS bundles)
 app.use(helmet({ crossOriginResourcePolicy: false }));
 app.use(cors(corsOptions));
 app.use(morgan('dev'));
+// The converted report-card template (HTML + extracted images) is far larger than a normal JSON body.
+app.use('/api/report-card-template/html', express.json({ limit: '30mb' }));
 app.use(express.json({
   limit: '10mb',
   // Meta signs the exact bytes it sends; keep them for the webhook only.

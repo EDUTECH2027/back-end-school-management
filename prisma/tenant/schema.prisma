@@ -532,6 +532,9 @@ model ReportCardTemplate {
   page_height Float?
   fields      Json?
   file_data   Bytes?    // the PDF itself (server disk is ephemeral)
+  html_template Json?   // converted template: { html (with {{asset:id}} refs), css, assets }
+  html_meta   Json?     // conversion metadata (pages, elements, warnings) — small, returned with the template
+  render_mode String    @default("overlay") // 'overlay' = fill the original PDF, 'html' = fill the converted HTML template
   updated_at  DateTime? @default(now())
 
   @@map("report_card_templates")

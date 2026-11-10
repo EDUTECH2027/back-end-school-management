@@ -19,6 +19,7 @@ const { UPLOADS_ROOT } = require('../../utils/forumUploads');
 
 // Every new school administrator starts with this password and must replace it at first login (must_change_password).
 const DEFAULT_ADMIN_PASSWORD = 'Welcome@2025';
+const EMAIL_IN_USE = 'E-mail is used by another user. change e-mail address';
 
 const guard = [authenticatePlatform, authorizePlatform()];
 
@@ -113,11 +114,13 @@ router.post('/', ...guard, async (req, res) => {
   }
 
   // The two checks are independent, so run them together (each is a round trip to a remote database).
-  const [directoryHit, plan] = await Promise.all([
+  // Login looks at platform administrators first, so an email they use can never sign in to a school: reject it too.
+  const [directoryHit, platformAdminHit, plan] = await Promise.all([
     platformClient.userDirectory.findFirst({ where: { email: { equals: admin_email, mode: 'insensitive' } } }),
+    platformClient.platformAdmin.findFirst({ where: { email: { equals: admin_email, mode: 'insensitive' } }, select: { id: true } }),
     platformClient.subscriptionPlan.findUnique({ where: { id: plan_id } }),
   ]);
-  if (directoryHit) return res.status(409).json({ error: 'Admin email already in use by another school' });
+  if (directoryHit || platformAdminHit) return res.status(409).json({ error: EMAIL_IN_USE });
   if (!plan) return res.status(422).json({ error: 'Unknown plan_id' });
 
   const schoolId = uuid();

@@ -12,6 +12,7 @@ const platformClient = require('../db/platformClient');
 const { logAction } = require('../routes/platform/_helpers');
 
 const guard = [authenticate, authorize('super_admin', 'head_teacher')];
+const EMAIL_IN_USE = 'E-mail is used by another user. change e-mail address';
 
 const PUBLIC_FIELDS = { id: true, name: true, email: true, role: true, initials: true, teacher_id: true, student_id: true, parent_id: true, created_at: true };
 
@@ -52,9 +53,13 @@ router.post('/', ...guard, async (req, res) => {
   if (!name || !email || !password || !role) return res.status(422).json({ error: 'name, email, password, role required' });
 
   const existing = await req.db.user.findFirst({ where: { email: { equals: email, mode: 'insensitive' } } });
-  if (existing) return res.status(409).json({ error: 'Email already in use' });
-  const directoryHit = await platformClient.userDirectory.findFirst({ where: { email: { equals: email, mode: 'insensitive' } } });
-  if (directoryHit) return res.status(409).json({ error: 'Email already in use' });
+  if (existing) return res.status(409).json({ error: EMAIL_IN_USE });
+  const [directoryHit, platformAdminHit] = await Promise.all([
+    platformClient.userDirectory.findFirst({ where: { email: { equals: email, mode: 'insensitive' } } }),
+    // platform administrators are matched first at login, so their emails cannot be reused by a school user
+    platformClient.platformAdmin.findFirst({ where: { email: { equals: email, mode: 'insensitive' } }, select: { id: true } }),
+  ]);
+  if (directoryHit || platformAdminHit) return res.status(409).json({ error: EMAIL_IN_USE });
 
   const id = uuid();
   const hash = bcrypt.hashSync(password, 10);
